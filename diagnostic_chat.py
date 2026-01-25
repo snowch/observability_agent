@@ -178,15 +178,24 @@ When a user reports an issue, your PRIMARY GOAL is to find the ROOT CAUSE, not j
    - Database timeouts or connection failures are often the ROOT CAUSE of cascading failures
    - Long-running database spans (high duration_ns) indicate database problems
 
-3. **Follow the dependency chain**:
+3. **CRITICAL: Check for MISSING spans (silent failures)**:
+   - If a database/service is DOWN or PAUSED, it WON'T emit telemetry!
+   - ABSENCE of expected db_system spans is a RED FLAG
+   - Compare: Are there postgresql/redis spans in the last 5 minutes? If services normally use a DB but there are NO db spans, the DB may be down!
+   - Look for CLIENT spans trying to connect to databases that have no corresponding SERVER spans
+   - Timeouts WITHOUT any downstream spans = the downstream service is unreachable/dead
+
+4. **Follow the dependency chain**:
    - Use parent_span_id to trace the call hierarchy
    - The root cause is usually in a LEAF span (no children), not in parent spans
    - Timeouts in parent services are usually CAUSED BY slow/failed downstream dependencies
+   - If a trace STOPS at a certain point with no child spans, that's where the failure is
 
-4. **Look for patterns that indicate infrastructure issues**:
+5. **Look for patterns that indicate infrastructure issues**:
    - Multiple services failing simultaneously = shared dependency (database, cache, message queue)
    - Timeouts without errors = blocked/hung service or network issue
    - Connection errors = service is down or unreachable
+   - NO SPANS from a service that should be active = service is completely down
 
 ### Critical Queries to Run
 
@@ -209,7 +218,17 @@ WHERE trace_id = 'xxx'
 ORDER BY start_time
 ```
 
-3. **Check for database issues specifically**:
+3. **IMPORTANT: Check if databases are responding AT ALL**:
+```sql
+SELECT db_system, COUNT(*) as span_count, MAX(start_time) as last_seen
+FROM traces_otel_analytic
+WHERE db_system IS NOT NULL AND db_system != ''
+  AND start_time > NOW() - INTERVAL '10' MINUTE
+GROUP BY db_system
+```
+If a database that should be active has ZERO spans or last_seen is old, IT MAY BE DOWN!
+
+4. **Check for database issues specifically**:
 ```sql
 SELECT service_name, span_name, db_system, status_code, duration_ns/1000000.0 as ms
 FROM traces_otel_analytic
@@ -219,7 +238,7 @@ ORDER BY duration_ns DESC
 LIMIT 20
 ```
 
-4. **Look for the slowest/stuck operations**:
+5. **Look for the slowest/stuck operations**:
 ```sql
 SELECT service_name, span_name, db_system, status_code, duration_ns/1000000.0 as ms
 FROM traces_otel_analytic
@@ -228,7 +247,7 @@ ORDER BY duration_ns DESC
 LIMIT 20
 ```
 
-5. **Check span_events for exceptions with details**:
+6. **Check span_events for exceptions with details**:
 ```sql
 SELECT service_name, span_name, exception_type, exception_message
 FROM span_events_otel_analytic
@@ -237,12 +256,32 @@ WHERE exception_type IS NOT NULL AND exception_type != ''
 LIMIT 20
 ```
 
+7. **Look for connection/timeout errors in exception messages**:
+```sql
+SELECT service_name, exception_type, exception_message, COUNT(*) as occurrences
+FROM span_events_otel_analytic
+WHERE timestamp > NOW() - INTERVAL '5' MINUTE
+  AND (exception_message LIKE '%connection%' OR exception_message LIKE '%timeout%'
+       OR exception_message LIKE '%refused%' OR exception_message LIKE '%unreachable%')
+GROUP BY service_name, exception_type, exception_message
+ORDER BY occurrences DESC
+```
+
 ### DO NOT STOP AT SURFACE ERRORS
 
 - 504 Gateway Timeout → Find WHICH downstream service timed out
 - Connection refused → Find WHICH service is down
 - High latency → Find WHICH database/service is slow
 - "Service unavailable" → Find the ACTUAL unavailable component
+- No database spans → DATABASE MAY BE DOWN (can't report if it's dead!)
+
+### Detecting Silent Failures (Down Services)
+
+A service that is DOWN or PAUSED cannot emit telemetry. Look for:
+1. Services that normally emit spans but now have NONE
+2. CLIENT spans with no corresponding responses
+3. Traces that stop abruptly at a service boundary
+4. Connection timeout exceptions pointing to a specific host/service
 
 ### Example Root Cause Chain
 
@@ -251,6 +290,13 @@ User sees: "Frontend is slow"
 ↓ Follow trace_id, see checkout-service taking 30s
 ↓ Follow trace deeper, see postgres query taking 30s
 ↓ ROOT CAUSE: PostgreSQL is slow/down
+
+OR (silent failure):
+User sees: "Frontend is slow"
+↓ Query frontend traces, find 15s timeouts
+↓ Follow trace_id, trace STOPS at a service trying to reach postgres
+↓ Check db_system spans - ZERO postgres spans in last 5 minutes!
+↓ ROOT CAUSE: PostgreSQL is DOWN (no telemetry = can't respond)
 
 ALWAYS trace to the leaf of the dependency tree!
 
@@ -262,6 +308,7 @@ ALWAYS trace to the leaf of the dependency tree!
 - When investigating errors, filter by status_code = 'ERROR' or severity_text = 'ERROR'
 - For the current time, use NOW() or CURRENT_TIMESTAMP
 - ALWAYS check db_system column when investigating slowness or timeouts
+- Check for ABSENCE of spans, not just presence of errors
 
 ## Important Notes
 
@@ -270,6 +317,7 @@ ALWAYS trace to the leaf of the dependency tree!
 - Don't stop at the first error you find - TRACE IT DEEPER
 - Always explain what you're looking for with each query
 - When you find the root cause, clearly state it with evidence
+- Remember: NO DATA from a service can mean the service is DOWN
 
 You have access to a tool called `execute_sql` that runs SQL queries against the VastDB database via Trino. Use it to investigate issues.
 """
