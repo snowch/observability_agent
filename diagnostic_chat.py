@@ -6,7 +6,7 @@ An interactive chat interface that uses an LLM to help diagnose issues
 by querying observability data (logs, metrics, traces) stored in VastDB via Trino.
 
 Usage:
-    export OPENAI_API_KEY=your_api_key
+    export ANTHROPIC_API_KEY=your_api_key
     export TRINO_HOST=trino.example.com
     export TRINO_PORT=443
     export TRINO_USER=your_user
@@ -32,7 +32,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
-from openai import OpenAI
+import anthropic
 
 try:
     from trino.dbapi import connect as trino_connect
@@ -46,8 +46,8 @@ except ImportError:
 # Configuration
 # =============================================================================
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
 
 # Trino configuration
 TRINO_HOST = os.getenv("TRINO_HOST")
@@ -199,7 +199,7 @@ When a user reports an issue (e.g., "ad service is slow"), follow this diagnosti
 - Always explain what you're looking for with each query
 - Summarize findings after each query result
 
-You have access to a function called `execute_sql` that runs SQL queries against the VastDB database via Trino. Use it to investigate issues.
+You have access to a tool called `execute_sql` that runs SQL queries against the VastDB database via Trino. Use it to investigate issues.
 """
 
 
@@ -293,18 +293,24 @@ class TrinoQueryExecutor:
 
 
 # =============================================================================
-# OpenAI Chat Interface
+# Claude Chat Interface
 # =============================================================================
 
-# Define the SQL execution tool for OpenAI function calling
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "execute_sql",
-            "description": """Execute a SQL query against the VastDB observability database via Trino.
+class DiagnosticChat:
+    """Interactive chat interface using Claude for diagnosis."""
 
-Use this function to query logs, metrics, traces, span events, and span links.
+    def __init__(self):
+        self.client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        self.query_executor = TrinoQueryExecutor()
+        self.conversation_history: List[Dict] = []
+
+        # Define the SQL execution tool
+        self.tools = [
+            {
+                "name": "execute_sql",
+                "description": """Execute a SQL query against the VastDB observability database via Trino.
+
+Use this tool to query logs, metrics, traces, span events, and span links.
 
 Available tables:
 - logs_otel_analytic: Log records with timestamp, service_name, severity_text, body_text, trace_id
@@ -315,29 +321,17 @@ Available tables:
 
 Always include a LIMIT clause to avoid returning too many results.
 Results are limited to 100 rows maximum.""",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "sql": {
-                        "type": "string",
-                        "description": "The SQL SELECT query to execute"
-                    }
-                },
-                "required": ["sql"]
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "sql": {
+                            "type": "string",
+                            "description": "The SQL SELECT query to execute"
+                        }
+                    },
+                    "required": ["sql"]
+                }
             }
-        }
-    }
-]
-
-
-class DiagnosticChat:
-    """Interactive chat interface using OpenAI for diagnosis."""
-
-    def __init__(self):
-        self.client = OpenAI(api_key=OPENAI_API_KEY)
-        self.query_executor = TrinoQueryExecutor()
-        self.conversation_history: List[Dict] = [
-            {"role": "system", "content": SYSTEM_PROMPT}
         ]
 
     def chat(self, user_message: str) -> str:
@@ -349,30 +343,33 @@ class DiagnosticChat:
             "content": user_message
         })
 
-        # Keep conversation history manageable (keep system prompt + last 20 messages)
-        if len(self.conversation_history) > 21:
-            self.conversation_history = [self.conversation_history[0]] + self.conversation_history[-20:]
+        # Keep conversation history manageable
+        if len(self.conversation_history) > 20:
+            self.conversation_history = self.conversation_history[-20:]
 
         # Initial API call
         response = self._call_api()
 
         # Handle tool use loop
-        while response.choices[0].message.tool_calls:
+        while response.stop_reason == "tool_use":
             # Process tool calls
             tool_results = self._process_tool_calls(response)
 
-            # Add assistant message with tool calls to history
-            self.conversation_history.append(response.choices[0].message)
-
-            # Add tool results to history
-            for result in tool_results:
-                self.conversation_history.append(result)
+            # Add assistant response and tool results to history
+            self.conversation_history.append({
+                "role": "assistant",
+                "content": response.content
+            })
+            self.conversation_history.append({
+                "role": "user",
+                "content": tool_results
+            })
 
             # Continue the conversation
             response = self._call_api()
 
         # Extract final text response
-        final_response = response.choices[0].message.content or ""
+        final_response = self._extract_text(response)
 
         # Add to history
         self.conversation_history.append({
@@ -383,11 +380,12 @@ class DiagnosticChat:
         return final_response
 
     def _call_api(self):
-        """Make an API call to OpenAI."""
-        return self.client.chat.completions.create(
-            model=OPENAI_MODEL,
+        """Make an API call to Claude."""
+        return self.client.messages.create(
+            model=ANTHROPIC_MODEL,
             max_tokens=4096,
-            tools=TOOLS,
+            system=SYSTEM_PROMPT,
+            tools=self.tools,
             messages=self.conversation_history
         )
 
@@ -395,40 +393,42 @@ class DiagnosticChat:
         """Process tool calls from the response."""
         tool_results = []
 
-        for tool_call in response.choices[0].message.tool_calls:
-            function_name = tool_call.function.name
-            function_args = json.loads(tool_call.function.arguments)
+        for content_block in response.content:
+            if content_block.type == "tool_use":
+                tool_name = content_block.name
+                tool_input = content_block.input
+                tool_use_id = content_block.id
 
-            if function_name == "execute_sql":
-                sql = function_args.get("sql", "")
-                print(f"\n[Executing SQL]\n{sql}\n")
+                if tool_name == "execute_sql":
+                    sql = tool_input.get("sql", "")
+                    print(f"\n[Executing SQL]\n{sql}\n")
 
-                result = self.query_executor.execute_query(sql)
+                    result = self.query_executor.execute_query(sql)
 
-                # Format result for display
-                if result["success"]:
-                    print(f"[Query returned {result['row_count']} rows]")
-                    if result["rows"]:
-                        # Show preview of first few rows
-                        preview_count = min(3, len(result["rows"]))
-                        for i, row in enumerate(result["rows"][:preview_count]):
-                            print(f"  Row {i+1}: {self._format_row_preview(row)}")
-                        if len(result["rows"]) > preview_count:
-                            print(f"  ... and {len(result['rows']) - preview_count} more rows")
+                    # Format result for display
+                    if result["success"]:
+                        print(f"[Query returned {result['row_count']} rows]")
+                        if result["rows"]:
+                            # Show preview of first few rows
+                            preview_count = min(3, len(result["rows"]))
+                            for i, row in enumerate(result["rows"][:preview_count]):
+                                print(f"  Row {i+1}: {self._format_row_preview(row)}")
+                            if len(result["rows"]) > preview_count:
+                                print(f"  ... and {len(result['rows']) - preview_count} more rows")
+                    else:
+                        print(f"[Query Error: {result['error']}]")
+
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": json.dumps(result, default=str)
+                    })
                 else:
-                    print(f"[Query Error: {result['error']}]")
-
-                tool_results.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": json.dumps(result, default=str)
-                })
-            else:
-                tool_results.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": json.dumps({"error": f"Unknown function: {function_name}"})
-                })
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": json.dumps({"error": f"Unknown tool: {tool_name}"})
+                    })
 
         return tool_results
 
@@ -440,11 +440,17 @@ class DiagnosticChat:
             parts.append(f"{k}={v_str}")
         return ", ".join(parts)
 
+    def _extract_text(self, response) -> str:
+        """Extract text content from response."""
+        text_parts = []
+        for content_block in response.content:
+            if hasattr(content_block, 'text'):
+                text_parts.append(content_block.text)
+        return "\n".join(text_parts)
+
     def clear_history(self):
         """Clear conversation history."""
-        self.conversation_history = [
-            {"role": "system", "content": SYSTEM_PROMPT}
-        ]
+        self.conversation_history = []
         print("Conversation history cleared.")
 
 
@@ -456,7 +462,7 @@ def print_banner():
     """Print welcome banner."""
     print("=" * 70)
     print("  Observability Diagnostic Chat")
-    print("  Powered by OpenAI + Trino + VastDB")
+    print("  Powered by Claude + Trino + VastDB")
     print("=" * 70)
     print()
     print("Describe your issue and I'll help diagnose it by querying")
@@ -480,8 +486,8 @@ def validate_config():
     """Validate required configuration."""
     errors = []
 
-    if not OPENAI_API_KEY:
-        errors.append("OPENAI_API_KEY is required")
+    if not ANTHROPIC_API_KEY:
+        errors.append("ANTHROPIC_API_KEY is required")
 
     if not TRINO_HOST:
         errors.append("TRINO_HOST is required")
@@ -510,7 +516,7 @@ def main():
         print("Initializing...")
         chat = DiagnosticChat()
         print(f"Connected to: {chat.query_executor.get_backend_name()}")
-        print(f"Using model: {OPENAI_MODEL}")
+        print(f"Using model: {ANTHROPIC_MODEL}")
         print()
     except Exception as e:
         print(f"Error initializing: {type(e).__name__}: {e}")
@@ -537,7 +543,7 @@ def main():
                 print_banner()
                 continue
 
-            # Get response from OpenAI
+            # Get response from Claude
             print()
             response = chat.chat(user_input)
             print(f"\nAssistant: {response}\n")
