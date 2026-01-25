@@ -178,12 +178,14 @@ When a user reports an issue, your PRIMARY GOAL is to find the ROOT CAUSE, not j
    - Database timeouts or connection failures are often the ROOT CAUSE of cascading failures
    - Long-running database spans (high duration_ns) indicate database problems
 
-3. **CRITICAL: Check for MISSING spans (silent failures)**:
+3. **CRITICAL: Check for MISSING telemetry (silent failures)**:
    - If a database/service is DOWN or PAUSED, it WON'T emit telemetry!
    - ABSENCE of expected db_system spans is a RED FLAG
    - Compare: Are there postgresql/redis spans in the last 5 minutes? If services normally use a DB but there are NO db spans, the DB may be down!
    - Look for CLIENT spans trying to connect to databases that have no corresponding SERVER spans
    - Timeouts WITHOUT any downstream spans = the downstream service is unreachable/dead
+   - **CHECK METRICS TOO**: If a service stops emitting metrics, it's likely down
+   - Compare metric counts between recent period vs earlier - a sharp drop indicates failure
 
 4. **Follow the dependency chain**:
    - Use parent_span_id to trace the call hierarchy
@@ -267,6 +269,29 @@ GROUP BY service_name, exception_type, exception_message
 ORDER BY occurrences DESC
 ```
 
+8. **Check for metrics drop-off (services that stopped reporting)**:
+```sql
+SELECT service_name, COUNT(*) as metric_count, MAX(timestamp) as last_metric
+FROM metrics_otel_analytic
+WHERE timestamp > NOW() - INTERVAL '10' MINUTE
+GROUP BY service_name
+ORDER BY last_metric ASC
+```
+Services with old last_metric or low metric_count compared to others may be DOWN!
+
+9. **Compare recent vs earlier metric volume to detect sudden drops**:
+```sql
+SELECT service_name,
+       SUM(CASE WHEN timestamp > NOW() - INTERVAL '2' MINUTE THEN 1 ELSE 0 END) as last_2min,
+       SUM(CASE WHEN timestamp BETWEEN NOW() - INTERVAL '10' MINUTE AND NOW() - INTERVAL '8' MINUTE THEN 1 ELSE 0 END) as earlier_2min
+FROM metrics_otel_analytic
+WHERE timestamp > NOW() - INTERVAL '10' MINUTE
+GROUP BY service_name
+HAVING SUM(CASE WHEN timestamp > NOW() - INTERVAL '2' MINUTE THEN 1 ELSE 0 END) = 0
+   AND SUM(CASE WHEN timestamp BETWEEN NOW() - INTERVAL '10' MINUTE AND NOW() - INTERVAL '8' MINUTE THEN 1 ELSE 0 END) > 0
+```
+This finds services that WERE reporting metrics but have STOPPED - strong indicator of failure!
+
 ### DO NOT STOP AT SURFACE ERRORS
 
 - 504 Gateway Timeout → Find WHICH downstream service timed out
@@ -282,6 +307,8 @@ A service that is DOWN or PAUSED cannot emit telemetry. Look for:
 2. CLIENT spans with no corresponding responses
 3. Traces that stop abruptly at a service boundary
 4. Connection timeout exceptions pointing to a specific host/service
+5. **METRICS DROP-OFF**: Services that were emitting metrics but suddenly stopped
+6. Compare metric volume between now vs 5-10 minutes ago - a cliff drop = failure
 
 ### Example Root Cause Chain
 
