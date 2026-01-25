@@ -1,6 +1,8 @@
+# Data ingestion
 vastdb>=1.0.0
 kafka-python>=2.0.2
+pyarrow>=14.0.0
+
+# Diagnostic chat tool
 anthropic>=0.40.0
 trino>=0.330.0
-pandas>=2.0.0
-pyarrow>=14.0.0
