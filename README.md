@@ -42,7 +42,7 @@ pip install -r requirements.txt
 Set environment variables:
 
 ```bash
-export ANTHROPIC_API_KEY=your_api_key
+export OPENAI_API_KEY=your_api_key
 export TRINO_HOST=trino.example.com
 export TRINO_PORT=443
 export TRINO_USER=your_user
