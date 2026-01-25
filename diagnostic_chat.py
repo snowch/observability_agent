@@ -22,6 +22,9 @@ Example queries:
     - "trace the request with id abc123"
 """
 
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 import json
 import os
 import re
@@ -223,6 +226,7 @@ class TrinoQueryExecutor:
             schema=TRINO_SCHEMA,
             http_scheme=TRINO_HTTP_SCHEME,
             auth=auth,
+            verify=False,
         )
 
     def get_backend_name(self) -> str:
