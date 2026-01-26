@@ -47,7 +47,7 @@ except ImportError:
 # =============================================================================
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-3-5-haiku-20241022")
 
 # Trino configuration
 TRINO_HOST = os.getenv("TRINO_HOST")
