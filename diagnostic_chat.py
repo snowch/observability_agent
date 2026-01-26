@@ -23,7 +23,9 @@ Example queries:
 """
 
 import urllib3
+import warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+warnings.filterwarnings("ignore", message=".*model.*is deprecated.*")
 
 import json
 import os
@@ -47,7 +49,7 @@ except ImportError:
 # =============================================================================
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-3-5-haiku-20241022")
 
 # Trino configuration
 TRINO_HOST = os.getenv("TRINO_HOST")
@@ -309,6 +311,69 @@ A service that is DOWN or PAUSED cannot emit telemetry. Look for:
 4. Connection timeout exceptions pointing to a specific host/service
 5. **METRICS DROP-OFF**: Services that were emitting metrics but suddenly stopped
 6. Compare metric volume between now vs 5-10 minutes ago - a cliff drop = failure
+
+### Detecting Long-Standing Issues (Chronic Problems)
+
+Issues that have been happening for a long time won't show as "changes" - they're the new normal. Use ABSOLUTE THRESHOLDS:
+
+1. **Error rate thresholds** - Any service with >5% error rate is unhealthy:
+```sql
+SELECT service_name,
+       COUNT(*) as total,
+       SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) as errors,
+       ROUND(100.0 * SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) / COUNT(*), 2) as error_pct
+FROM traces_otel_analytic
+WHERE start_time > NOW() - INTERVAL '1' HOUR
+GROUP BY service_name
+HAVING SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) > 0
+ORDER BY error_pct DESC
+```
+
+2. **Latency thresholds** - Operations taking >5 seconds are problematic:
+```sql
+SELECT service_name, span_name, db_system,
+       COUNT(*) as slow_count,
+       AVG(duration_ns/1000000.0) as avg_ms,
+       MAX(duration_ns/1000000.0) as max_ms
+FROM traces_otel_analytic
+WHERE start_time > NOW() - INTERVAL '1' HOUR
+  AND duration_ns > 5000000000  -- > 5 seconds
+GROUP BY service_name, span_name, db_system
+ORDER BY slow_count DESC
+```
+
+3. **Compare to longer historical baseline** - Look back hours or days:
+```sql
+SELECT service_name,
+       SUM(CASE WHEN start_time > NOW() - INTERVAL '1' HOUR THEN 1 ELSE 0 END) as last_hour,
+       SUM(CASE WHEN start_time BETWEEN NOW() - INTERVAL '24' HOUR AND NOW() - INTERVAL '23' HOUR THEN 1 ELSE 0 END) as yesterday_same_hour
+FROM traces_otel_analytic
+WHERE start_time > NOW() - INTERVAL '24' HOUR
+GROUP BY service_name
+```
+
+4. **Cross-service comparison** - If similar services have different error rates, investigate:
+```sql
+SELECT service_name,
+       ROUND(100.0 * SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) / COUNT(*), 2) as error_pct
+FROM traces_otel_analytic
+WHERE start_time > NOW() - INTERVAL '1' HOUR
+GROUP BY service_name
+ORDER BY error_pct DESC
+```
+
+5. **Check for persistent exceptions** - Same error repeatedly = chronic issue:
+```sql
+SELECT service_name, exception_type, exception_message, COUNT(*) as occurrences
+FROM span_events_otel_analytic
+WHERE timestamp > NOW() - INTERVAL '1' HOUR
+  AND exception_type IS NOT NULL AND exception_type != ''
+GROUP BY service_name, exception_type, exception_message
+ORDER BY occurrences DESC
+LIMIT 20
+```
+
+Use these when the user reports an ongoing issue or when recent comparisons show no anomalies but the system is clearly unhealthy.
 
 ### Example Root Cause Chain
 
