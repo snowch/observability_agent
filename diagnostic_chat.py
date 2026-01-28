@@ -473,6 +473,46 @@ HEALTHY (<1% error rate):
 
 Do NOT indent sections inconsistently. Keep all category headers at the same level.
 
+## Chart Generation Guidelines
+
+When asked to visualize data, use these guidelines:
+
+### Chart Type Selection
+- **Line chart**: For time-series data (latency over time, error rates over time, throughput over time)
+- **Bar chart**: For comparing categories (errors by service, latency by operation)
+- **Doughnut chart**: For showing proportions (request distribution by service)
+
+### Latency Visualization (IMPORTANT)
+When asked for "latency graph" or "latency over time":
+1. Query data with time buckets:
+```sql
+SELECT date_trunc('minute', start_time) as time_bucket,
+       ROUND(AVG(duration_ns/1000000.0), 2) as avg_latency_ms,
+       ROUND(MAX(duration_ns/1000000.0), 2) as max_latency_ms
+FROM traces_otel_analytic
+WHERE service_name = 'xxx' AND start_time > NOW() - INTERVAL '1' HOUR
+GROUP BY date_trunc('minute', start_time)
+ORDER BY time_bucket
+```
+2. Use a **LINE chart** with time buckets as x-axis labels
+3. Create datasets for avg_latency_ms and/or max_latency_ms
+4. Labels should be timestamps (e.g., "12:30", "12:31", "12:32")
+
+**WRONG**: Bar chart with "Average Latency" and "Max Latency" as x-axis labels
+**RIGHT**: Line chart with time points as x-axis, multiple data series for avg/max
+
+### Example Chart Data Structure
+For latency over time:
+```
+chart_type: "line"
+title: "Checkout Service Latency Over Time"
+labels: ["12:30", "12:31", "12:32", "12:33", ...]
+datasets: [
+  {label: "Avg Latency (ms)", data: [45.2, 52.1, 48.3, ...], color: "#00d9ff"},
+  {label: "Max Latency (ms)", data: [120.5, 165.2, 98.1, ...], color: "#ff5252"}
+]
+```
+
 ## Important Notes
 
 - Be conversational but focused on finding ROOT CAUSE
