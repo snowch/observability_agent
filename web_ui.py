@@ -656,17 +656,28 @@ def system_status():
         status['recent_errors'] = result['rows']
 
     # Get host metrics (CPU, memory, etc.)
+    # Filter to only show hosts where we can extract a valid hostname
     host_query = """
     SELECT
-        COALESCE(NULLIF(REGEXP_EXTRACT(attributes_flat, 'host.name=([^,]+)'), ''), 'unknown') as host_name,
-        MAX(CASE WHEN metric_name = 'system.cpu.utilization' THEN ROUND(value_double * 100, 1) END) as cpu_pct,
-        MAX(CASE WHEN metric_name = 'system.memory.utilization' THEN ROUND(value_double * 100, 1) END) as memory_pct,
-        MAX(CASE WHEN metric_name = 'system.filesystem.utilization' THEN ROUND(value_double * 100, 1) END) as disk_pct,
-        MAX(timestamp) as last_seen
-    FROM metrics_otel_analytic
-    WHERE metric_name IN ('system.cpu.utilization', 'system.memory.utilization', 'system.filesystem.utilization')
-      AND timestamp > NOW() - INTERVAL '2' MINUTE
-    GROUP BY COALESCE(NULLIF(REGEXP_EXTRACT(attributes_flat, 'host.name=([^,]+)'), ''), 'unknown')
+        host_name,
+        MAX(cpu_pct) as cpu_pct,
+        MAX(memory_pct) as memory_pct,
+        MAX(disk_pct) as disk_pct,
+        MAX(last_seen) as last_seen
+    FROM (
+        SELECT
+            REGEXP_EXTRACT(attributes_flat, 'host.name=([^,]+)') as host_name,
+            CASE WHEN metric_name = 'system.cpu.utilization' THEN ROUND(value_double * 100, 1) END as cpu_pct,
+            CASE WHEN metric_name = 'system.memory.utilization' THEN ROUND(value_double * 100, 1) END as memory_pct,
+            CASE WHEN metric_name = 'system.filesystem.utilization' THEN ROUND(value_double * 100, 1) END as disk_pct,
+            timestamp as last_seen
+        FROM metrics_otel_analytic
+        WHERE metric_name IN ('system.cpu.utilization', 'system.memory.utilization', 'system.filesystem.utilization')
+          AND timestamp > NOW() - INTERVAL '2' MINUTE
+          AND attributes_flat LIKE '%host.name=%'
+    ) sub
+    WHERE host_name IS NOT NULL AND host_name != ''
+    GROUP BY host_name
     """
     result = executor.execute_query(host_query)
     if result['success']:
