@@ -184,7 +184,7 @@ GROUP BY db_system
 ```
 
 ```sql
--- 2. Check for connection/database errors in exceptions
+-- 2. Check for connection/infrastructure errors in exceptions
 SELECT service_name, exception_type, exception_message, COUNT(*) as occurrences
 FROM span_events_otel_analytic
 WHERE timestamp > NOW() - INTERVAL '5' MINUTE
@@ -192,24 +192,27 @@ WHERE timestamp > NOW() - INTERVAL '5' MINUTE
        OR exception_message LIKE '%timeout%'
        OR exception_message LIKE '%refused%'
        OR exception_message LIKE '%FATAL%'
-       OR exception_message LIKE '%database%'
-       OR exception_message LIKE '%postgres%'
-       OR exception_message LIKE '%redis%')
+       OR exception_message LIKE '%unavailable%'
+       OR exception_message LIKE '%unreachable%'
+       OR exception_message LIKE '%failed to connect%'
+       OR exception_message LIKE '%no route to host%'
+       OR exception_message LIKE '%network%')
 GROUP BY service_name, exception_type, exception_message
 ORDER BY occurrences DESC
 ```
 
 ```sql
--- 3. Check for connection errors in logs
+-- 3. Check for infrastructure errors in logs
 SELECT service_name, body_text, COUNT(*) as occurrences
 FROM logs_otel_analytic
 WHERE timestamp > NOW() - INTERVAL '5' MINUTE
-  AND severity_text IN ('ERROR', 'FATAL')
+  AND severity_text IN ('ERROR', 'FATAL', 'WARN')
   AND (body_text LIKE '%connection%'
        OR body_text LIKE '%refused%'
        OR body_text LIKE '%FATAL%'
-       OR body_text LIKE '%database%'
-       OR body_text LIKE '%postgres%')
+       OR body_text LIKE '%timeout%'
+       OR body_text LIKE '%unavailable%'
+       OR body_text LIKE '%failed%')
 GROUP BY service_name, body_text
 ORDER BY occurrences DESC
 LIMIT 20
@@ -250,14 +253,34 @@ GROUP BY 1
 ORDER BY last_seen ASC
 ```
 
-**INTERPRET THE RESULTS:**
-- If a database has 0 spans in last 5 min → DATABASE IS DOWN
-- If you see "connection refused" errors → Target service/database is DOWN
-- If errors mention "postgres" or "FATAL" → PostgreSQL connection issue
-- Missing db_system that should exist → Check if that database is running
-- Service with last_2min=0 but earlier_5min>0 → SERVICE JUST WENT DOWN
-- Service with very low last_2min compared to earlier_5min → SERVICE IS DEGRADED
-- Host with old last_seen or low metric_count → HOST MAY BE DOWN OR UNHEALTHY
+**INTERPRET THE RESULTS - Follow the SysAdmin Diagnostic Process:**
+
+1. **Check for COMPLETE OUTAGES first:**
+   - Database with 0 spans in last 5 min → DATABASE IS DOWN
+   - Service with last_2min=0 but earlier_5min>0 → SERVICE JUST WENT DOWN
+   - Host with old last_seen → HOST MAY BE DOWN
+
+2. **Check for CONNECTIVITY issues:**
+   - "connection refused" → Target service is DOWN or not listening
+   - "timeout" → Target service is OVERLOADED or network issue
+   - "unreachable" / "no route" → NETWORK issue
+   - "FATAL" → Critical failure in the target component
+
+3. **Check for DEGRADATION:**
+   - Service with very low metrics vs earlier → SERVICE IS DEGRADED
+   - High error counts concentrated in specific services → Partial failure
+   - Slow response times → Resource exhaustion or bottleneck
+
+4. **Identify the ROOT CAUSE component:**
+   - Which component is mentioned in error messages?
+   - Which service/database stopped responding FIRST?
+   - Follow the dependency chain - the deepest failing component is usually the cause
+
+5. **Common root causes to check:**
+   - Databases: PostgreSQL, Redis, MongoDB, MySQL - check db_system spans
+   - Message queues: Kafka, RabbitMQ - check for consumer/producer errors
+   - External services: HTTP client errors to external APIs
+   - Infrastructure: Host down, network partition, resource exhaustion
 
 ### Root Cause Analysis Methodology
 

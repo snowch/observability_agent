@@ -91,52 +91,69 @@ Then open http://localhost:5000 in your browser.
 
 ## Testing with Simulated Failures
 
-To test the diagnostic capabilities, you can simulate infrastructure failures in the OpenTelemetry demo.
+To test the diagnostic capabilities, you can simulate infrastructure failures in the OpenTelemetry demo using the provided script.
 
-### Simulate PostgreSQL Failure
-
-The PostgreSQL database is used by the Accounting service. To simulate a database outage:
+### Using the Simulation Script
 
 ```bash
-# Enter the PostgreSQL container
-docker compose exec -it postgresql /bin/bash
+# From the opentelemetry-demo directory:
+cd /path/to/opentelemetry-demo
 
-# Block new connections AND terminate existing ones
-psql -U root -d ${POSTGRES_DB} -c "REVOKE CONNECT ON DATABASE ${POSTGRES_DB} FROM PUBLIC;"
-psql -U root -d ${POSTGRES_DB} -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${POSTGRES_DB}' AND pid <> pg_backend_pid();"
+# Copy the script or run from the observability_agent directory
+./scripts/simulate_failure.sh <action> <target>
+
+# Actions: block, unblock, status
+# Targets: postgres, redis, kafka, or any docker compose service name
 ```
 
-This will cause:
-- Services depending on PostgreSQL to fail with connection errors
-- Cascading failures in dependent services
-- The diagnostic tool should identify PostgreSQL as the root cause
+### Examples
 
-**To restore:**
 ```bash
-psql -U root -d ${POSTGRES_DB} -c "GRANT CONNECT ON DATABASE ${POSTGRES_DB} TO PUBLIC;"
+# Block PostgreSQL (gracefully blocks connections)
+./scripts/simulate_failure.sh block postgres
+
+# Check status
+./scripts/simulate_failure.sh status postgres
+
+# Restore PostgreSQL
+./scripts/simulate_failure.sh unblock postgres
+
+# Pause Redis (simulates timeout/hang)
+./scripts/simulate_failure.sh block redis
+
+# Stop any service completely
+./scripts/simulate_failure.sh block checkoutservice
 ```
 
-### Simulate Complete Service Outage
+### Manual Testing
 
-To completely stop a service (e.g., PostgreSQL):
+You can also manually simulate failures:
 
 ```bash
-# From the host machine (outside containers)
-docker compose stop postgresql
+# PostgreSQL - block connections
+docker compose exec postgresql psql -U root -d otel -c "REVOKE CONNECT ON DATABASE otel FROM PUBLIC;"
 
-# To restore
-docker compose start postgresql
+# PostgreSQL - restore
+docker compose exec postgresql psql -U root -d otel -c "GRANT CONNECT ON DATABASE otel TO PUBLIC;"
+
+# Any service - stop/start
+docker compose stop <service>
+docker compose start <service>
+
+# Any service - pause/unpause (simulates hang)
+docker compose pause <service>
+docker compose unpause <service>
 ```
 
 ### What to Look For
 
-When testing, ask the diagnostic chat:
+After simulating a failure, wait 30-60 seconds for effects to propagate, then ask the diagnostic chat:
 - "Show me errors in the last 5 minutes"
 - "What's wrong with the system?"
 - "Diagnose the frontend issues"
 
-The AI should:
-1. Check infrastructure health first (database spans, metrics)
-2. Identify missing telemetry from the affected service
-3. Trace cascading errors back to the root cause
-4. Recommend checking the specific failed component
+The AI should follow the SysAdmin diagnostic process:
+1. Check infrastructure health first (databases, hosts, services)
+2. Look for connection errors, timeouts, and missing telemetry
+3. Trace errors through the dependency chain
+4. Identify the root cause component
