@@ -2513,28 +2513,35 @@
             // Code blocks
             text = text.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
             text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
-            // Numbered lists (1. 2. 3. etc)
-            text = text.replace(/^(\d+)\. (.*$)/gm, '<li>$2</li>');
-            // Bullet lists
-            text = text.replace(/^\- (.*$)/gm, '<li>$1</li>');
-            text = text.replace(/^\* (.*$)/gm, '<li>$1</li>');
-            // Wrap consecutive li elements in ul/ol
-            text = text.replace(/(<li>[\s\S]*?<\/li>)(\s*)(?=<li>|$)/g, function(match) {
-                return match;
-            });
-            text = text.replace(/((?:<li>.*?<\/li>\s*)+)/g, '<ul>$1</ul>');
-            // Paragraphs
-            text = text.replace(/\n\n/g, '</p><p>');
+            // Numbered lists (1. 2. 3. etc) - handle with/without leading spaces
+            text = text.replace(/^[ \t]*(\d+)[\.\)] (.*$)/gm, '<oli>$2</oli>');
+            // Lettered lists (a. b. c. or a) b) c))
+            text = text.replace(/^[ \t]*[a-z][\.\)] (.*$)/gm, '<oli>$1</oli>');
+            // Bullet lists - handle -, *, • with optional leading spaces
+            text = text.replace(/^[ \t]*[\-\*•] (.*$)/gm, '<uli>$1</uli>');
+            // Wrap consecutive oli elements in ol
+            text = text.replace(/((?:<oli>.*?<\/oli>\s*)+)/g, '<ol>$1</ol>');
+            text = text.replace(/<oli>/g, '<li>').replace(/<\/oli>/g, '</li>');
+            // Wrap consecutive uli elements in ul
+            text = text.replace(/((?:<uli>.*?<\/uli>\s*)+)/g, '<ul>$1</ul>');
+            text = text.replace(/<uli>/g, '<li>').replace(/<\/uli>/g, '</li>');
+            // Paragraphs - handle single and double newlines
+            text = text.replace(/\n\n+/g, '</p><p>');
+            text = text.replace(/\n/g, '<br>');
             text = '<p>' + text + '</p>';
             // Clean up empty tags and nesting issues
             text = text.replace(/<p><\/p>/g, '');
             text = text.replace(/<p>(<h[123]>)/g, '$1');
             text = text.replace(/(<\/h[123]>)<\/p>/g, '$1');
-            text = text.replace(/<p>(<ul>)/g, '$1');
-            text = text.replace(/(<\/ul>)<\/p>/g, '$1');
+            text = text.replace(/<p>(<[ou]l>)/g, '$1');
+            text = text.replace(/(<\/[ou]l>)<\/p>/g, '$1');
             text = text.replace(/<p>(<pre>)/g, '$1');
             text = text.replace(/(<\/pre>)<\/p>/g, '$1');
             text = text.replace(/<p>\s*<\/p>/g, '');
+            text = text.replace(/<br>\s*(<[ou]l>)/g, '$1');
+            text = text.replace(/(<\/[ou]l>)\s*<br>/g, '$1');
+            text = text.replace(/<p><br>/g, '<p>');
+            text = text.replace(/<br><\/p>/g, '</p>');
             return text;
         }
 
