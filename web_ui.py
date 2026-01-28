@@ -656,29 +656,29 @@ def system_status():
         status['recent_errors'] = result['rows']
 
     # Get host metrics (CPU, memory, etc.)
-    # Filter to only show hosts where we can extract a valid hostname
-    # Only use .utilization metrics (0-1 range), not .usage (byte counts)
+    # Note: memory.utilization has state=used/free/cached - we want state=used
+    # Note: filesystem.utilization may need to be enabled in otel config
     host_query = """
     WITH host_metrics AS (
         SELECT
             TRIM(SPLIT_PART(SPLIT_PART(attributes_flat, 'host.name=', 2), ',', 1)) as host_name,
             metric_name,
             value_double,
+            attributes_flat,
             timestamp
         FROM metrics_otel_analytic
         WHERE metric_name IN ('system.cpu.utilization', 'system.memory.utilization', 'system.filesystem.utilization')
           AND timestamp > NOW() - INTERVAL '5' MINUTE
           AND attributes_flat LIKE '%host.name=%'
-          AND value_double >= 0 AND value_double <= 1
     )
     SELECT
         host_name,
-        MAX(CASE WHEN metric_name = 'system.cpu.utilization' THEN ROUND(value_double * 100, 1) END) as cpu_pct,
-        MAX(CASE WHEN metric_name = 'system.memory.utilization' THEN ROUND(value_double * 100, 1) END) as memory_pct,
-        MAX(CASE WHEN metric_name = 'system.filesystem.utilization' THEN ROUND(value_double * 100, 1) END) as disk_pct,
+        MAX(CASE WHEN metric_name = 'system.cpu.utilization' AND value_double <= 1 THEN ROUND(value_double * 100, 1) END) as cpu_pct,
+        MAX(CASE WHEN metric_name = 'system.memory.utilization' AND attributes_flat LIKE '%state=used%' AND value_double <= 1 THEN ROUND(value_double * 100, 1) END) as memory_pct,
+        MAX(CASE WHEN metric_name = 'system.filesystem.utilization' AND value_double <= 1 THEN ROUND(value_double * 100, 1) END) as disk_pct,
         MAX(timestamp) as last_seen
     FROM host_metrics
-    WHERE host_name IS NOT NULL AND host_name != ''
+    WHERE host_name IS NOT NULL AND LENGTH(host_name) > 0
     GROUP BY host_name
     """
     result = executor.execute_query(host_query)
