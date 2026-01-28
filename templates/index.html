@@ -521,6 +521,22 @@
         .message-content h3 { font-size: 14px; }
         .message-content ul, .message-content ol { margin: 12px 0; padding-left: 24px; }
         .message-content li { margin: 6px 0; }
+        .message-content .prompt-hints { list-style: none; padding-left: 0; }
+        .message-content .prompt-hints li {
+            cursor: pointer;
+            padding: 8px 12px;
+            margin: 4px 0;
+            background: var(--bg-primary);
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            transition: all 0.2s ease;
+            color: var(--accent-primary);
+        }
+        .message-content .prompt-hints li:hover {
+            background: var(--bg-secondary);
+            border-color: var(--accent-primary);
+            transform: translateX(4px);
+        }
         .message-content code {
             background: var(--bg-primary);
             padding: 3px 8px;
@@ -1594,13 +1610,13 @@
                 <div class="message-content">
                     <p>Hello! I'm your observability diagnostic assistant. I can help you investigate issues by querying logs, metrics, and traces.</p>
                     <p><strong>Example questions:</strong></p>
-                    <ul>
-                        <li>"The frontend is slow, what's wrong?"</li>
-                        <li>"Show me errors in the last 5 minutes"</li>
-                        <li>"Show me a graph of latency for checkout service"</li>
-                        <li>"Chart error rates by service over the last hour"</li>
-                        <li>"Show me the topology for PostgreSQL - what depends on it?"</li>
-                        <li>"What does the frontend depend on?" (show upstream deps)</li>
+                    <ul class="prompt-hints">
+                        <li onclick="setPrompt('The frontend is slow, what\\'s wrong?')">The frontend is slow, what's wrong?</li>
+                        <li onclick="setPrompt('Show me errors in the last 5 minutes')">Show me errors in the last 5 minutes</li>
+                        <li onclick="setPrompt('Show me a graph of latency for checkout service')">Show me a graph of latency for checkout service</li>
+                        <li onclick="setPrompt('Chart error rates by service over the last hour')">Chart error rates by service over the last hour</li>
+                        <li onclick="setPrompt('Show me the topology for PostgreSQL - what depends on it?')">Show me the topology for PostgreSQL - what depends on it?</li>
+                        <li onclick="setPrompt('What does the frontend depend on?')">What does the frontend depend on? (show upstream deps)</li>
                     </ul>
                     <p>What would you like to investigate?</p>
                 </div>
@@ -2115,6 +2131,12 @@
             btn.classList.remove('spinning');
         }
 
+        function setPrompt(text) {
+            const input = document.getElementById('message-input');
+            input.value = text;
+            input.focus();
+        }
+
         function handleKeyDown(event) {
             if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
@@ -2491,28 +2513,35 @@
             // Code blocks
             text = text.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
             text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
-            // Numbered lists (1. 2. 3. etc)
-            text = text.replace(/^(\d+)\. (.*$)/gm, '<li>$2</li>');
-            // Bullet lists
-            text = text.replace(/^\- (.*$)/gm, '<li>$1</li>');
-            text = text.replace(/^\* (.*$)/gm, '<li>$1</li>');
-            // Wrap consecutive li elements in ul/ol
-            text = text.replace(/(<li>[\s\S]*?<\/li>)(\s*)(?=<li>|$)/g, function(match) {
-                return match;
-            });
-            text = text.replace(/((?:<li>.*?<\/li>\s*)+)/g, '<ul>$1</ul>');
-            // Paragraphs
-            text = text.replace(/\n\n/g, '</p><p>');
+            // Numbered lists (1. 2. 3. etc) - handle with/without leading spaces
+            text = text.replace(/^[ \t]*(\d+)[\.\)] (.*$)/gm, '<oli>$2</oli>');
+            // Lettered lists (a. b. c. or a) b) c))
+            text = text.replace(/^[ \t]*[a-z][\.\)] (.*$)/gm, '<oli>$1</oli>');
+            // Bullet lists - handle -, *, • with optional leading spaces
+            text = text.replace(/^[ \t]*[\-\*•] (.*$)/gm, '<uli>$1</uli>');
+            // Wrap consecutive oli elements in ol
+            text = text.replace(/((?:<oli>.*?<\/oli>\s*)+)/g, '<ol>$1</ol>');
+            text = text.replace(/<oli>/g, '<li>').replace(/<\/oli>/g, '</li>');
+            // Wrap consecutive uli elements in ul
+            text = text.replace(/((?:<uli>.*?<\/uli>\s*)+)/g, '<ul>$1</ul>');
+            text = text.replace(/<uli>/g, '<li>').replace(/<\/uli>/g, '</li>');
+            // Paragraphs - handle single and double newlines
+            text = text.replace(/\n\n+/g, '</p><p>');
+            text = text.replace(/\n/g, '<br>');
             text = '<p>' + text + '</p>';
             // Clean up empty tags and nesting issues
             text = text.replace(/<p><\/p>/g, '');
             text = text.replace(/<p>(<h[123]>)/g, '$1');
             text = text.replace(/(<\/h[123]>)<\/p>/g, '$1');
-            text = text.replace(/<p>(<ul>)/g, '$1');
-            text = text.replace(/(<\/ul>)<\/p>/g, '$1');
+            text = text.replace(/<p>(<[ou]l>)/g, '$1');
+            text = text.replace(/(<\/[ou]l>)<\/p>/g, '$1');
             text = text.replace(/<p>(<pre>)/g, '$1');
             text = text.replace(/(<\/pre>)<\/p>/g, '$1');
             text = text.replace(/<p>\s*<\/p>/g, '');
+            text = text.replace(/<br>\s*(<[ou]l>)/g, '$1');
+            text = text.replace(/(<\/[ou]l>)\s*<br>/g, '$1');
+            text = text.replace(/<p><br>/g, '<p>');
+            text = text.replace(/<br><\/p>/g, '</p>');
             return text;
         }
 
