@@ -179,6 +179,12 @@ processors:
           enabled: false
         os.type:
           enabled: true
+  # Add host.name to metrics that don't have it (like postgresql, redis)
+  resource/add-host:
+    attributes:
+      - key: host.name
+        value: ${env:HOSTNAME}
+        action: upsert
   transform:
     error_mode: ignore
     trace_statements:
@@ -204,7 +210,7 @@ service:
       exporters: [otlp, debug, spanmetrics, kafka/traces]
     metrics:
       receivers: [docker_stats, httpcheck/frontend-proxy, hostmetrics, nginx, otlp, postgresql, redis, spanmetrics]
-      processors: [resourcedetection, memory_limiter, batch]
+      processors: [resourcedetection, resource/add-host, memory_limiter, batch]
       exporters: [otlphttp/prometheus, debug, kafka/metrics]
     logs:
       receivers: [otlp]

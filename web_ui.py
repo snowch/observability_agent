@@ -657,6 +657,7 @@ def system_status():
 
     # Get host metrics (CPU, memory, etc.)
     # Filter to only show hosts where we can extract a valid hostname
+    # Note: some collectors emit .utilization, others emit .time - handle both
     host_query = """
     SELECT
         host_name,
@@ -667,13 +668,13 @@ def system_status():
     FROM (
         SELECT
             REGEXP_EXTRACT(attributes_flat, 'host.name=([^,]+)') as host_name,
-            CASE WHEN metric_name = 'system.cpu.utilization' THEN ROUND(value_double * 100, 1) END as cpu_pct,
-            CASE WHEN metric_name = 'system.memory.utilization' THEN ROUND(value_double * 100, 1) END as memory_pct,
-            CASE WHEN metric_name = 'system.filesystem.utilization' THEN ROUND(value_double * 100, 1) END as disk_pct,
+            CASE WHEN metric_name IN ('system.cpu.utilization', 'system.cpu.usage') THEN ROUND(value_double * 100, 1) END as cpu_pct,
+            CASE WHEN metric_name IN ('system.memory.utilization', 'system.memory.usage') THEN ROUND(value_double * 100, 1) END as memory_pct,
+            CASE WHEN metric_name IN ('system.filesystem.utilization', 'system.filesystem.usage') THEN ROUND(value_double * 100, 1) END as disk_pct,
             timestamp as last_seen
         FROM metrics_otel_analytic
-        WHERE metric_name IN ('system.cpu.utilization', 'system.memory.utilization', 'system.filesystem.utilization')
-          AND timestamp > NOW() - INTERVAL '2' MINUTE
+        WHERE metric_name IN ('system.cpu.utilization', 'system.cpu.usage', 'system.memory.utilization', 'system.memory.usage', 'system.filesystem.utilization', 'system.filesystem.usage')
+          AND timestamp > NOW() - INTERVAL '5' MINUTE
           AND attributes_flat LIKE '%host.name=%'
     ) sub
     WHERE host_name IS NOT NULL AND host_name != ''
