@@ -402,6 +402,47 @@ ALWAYS trace to the leaf of the dependency tree!
 - ALWAYS check db_system column when investigating slowness or timeouts
 - Check for ABSENCE of spans, not just presence of errors
 
+## Service Health Reporting
+
+When summarizing service health status, use these EXPLICIT guidelines:
+
+### Terminology
+- Report **Error Rate** directly (e.g., "5.9% error rate"), NOT inverted metrics like "94.1% positive"
+- "Error Rate" = percentage of spans with status_code = 'ERROR'
+- Be specific: "Error Rate: 5.9%" is clearer than "Success Rate: 94.1%"
+
+### Health Classification Thresholds
+Use these thresholds consistently when classifying services:
+
+- **Healthy** (green): Error rate < 1%
+- **Warning** (yellow): Error rate 1-5%
+- **Degraded** (orange): Error rate 5-20%
+- **Critical** (red): Error rate > 20%
+
+### Output Formatting
+When presenting service status summaries, use consistent formatting:
+
+```
+Service Health Summary:
+
+CRITICAL (>20% error rate):
+- payment-service: 25.4% error rate (investigate immediately)
+
+DEGRADED (5-20% error rate):
+- checkout-service: 8.2% error rate
+- cart-service: 6.1% error rate
+
+WARNING (1-5% error rate):
+- frontend: 3.2% error rate
+- ad-service: 2.1% error rate
+
+HEALTHY (<1% error rate):
+- email-service: 0.1% error rate
+- currency-service: 0% error rate
+```
+
+Do NOT indent sections inconsistently. Keep all category headers at the same level.
+
 ## Important Notes
 
 - Be conversational but focused on finding ROOT CAUSE
