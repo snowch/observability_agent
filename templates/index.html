@@ -1404,6 +1404,62 @@
             font-weight: 600;
             color: var(--text-primary);
         }
+
+        /* Dependencies list */
+        .deps-list {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .dep-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .dep-item:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .dep-item:last-child {
+            border-bottom: none;
+        }
+
+        .dep-name {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .dep-type-badge {
+            font-size: 9px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            text-transform: uppercase;
+            font-weight: 600;
+        }
+
+        .dep-type-badge.service {
+            background: rgba(0, 217, 255, 0.15);
+            color: var(--accent-primary);
+        }
+
+        .dep-type-badge.database {
+            background: rgba(124, 58, 237, 0.15);
+            color: var(--accent-secondary);
+        }
+
+        .dep-calls {
+            font-size: 11px;
+            color: var(--text-muted);
+            font-family: 'JetBrains Mono', monospace;
+        }
     </style>
 </head>
 <body>
@@ -1539,6 +1595,7 @@
             </div>
             <div class="modal-tabs">
                 <div class="modal-tab active" onclick="switchModalTab('charts')">Charts</div>
+                <div class="modal-tab" onclick="switchModalTab('deps')">Dependencies</div>
                 <div class="modal-tab" onclick="switchModalTab('traces')">Traces <span class="tab-badge" id="traces-count">-</span></div>
                 <div class="modal-tab" onclick="switchModalTab('logs')">Logs <span class="tab-badge" id="logs-count">-</span></div>
                 <div class="modal-tab" onclick="switchModalTab('metrics')">Metrics <span class="tab-badge" id="metrics-count">-</span></div>
@@ -1665,6 +1722,24 @@
                                 </thead>
                                 <tbody></tbody>
                             </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Dependencies Tab -->
+                <div class="modal-tab-content" id="tab-deps">
+                    <div class="chart-row">
+                        <div class="chart-card">
+                            <h4>Upstream (What Calls This Service)</h4>
+                            <div class="deps-list" id="upstream-deps">
+                                <div class="empty-state">Loading...</div>
+                            </div>
+                        </div>
+                        <div class="chart-card">
+                            <h4>Downstream (What This Service Calls)</h4>
+                            <div class="deps-list" id="downstream-deps">
+                                <div class="empty-state">Loading...</div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -2650,6 +2725,57 @@
                 loadServiceLogs();
             } else if (tabName === 'metrics' && currentModalService) {
                 loadServiceMetrics();
+            } else if (tabName === 'deps' && currentModalService) {
+                loadServiceDependencies();
+            }
+        }
+
+        async function loadServiceDependencies() {
+            if (!currentModalService) return;
+
+            const upstreamDiv = document.getElementById('upstream-deps');
+            const downstreamDiv = document.getElementById('downstream-deps');
+
+            upstreamDiv.innerHTML = '<div class="empty-state">Loading...</div>';
+            downstreamDiv.innerHTML = '<div class="empty-state">Loading...</div>';
+
+            try {
+                const response = await fetch(`/api/service/${encodeURIComponent(currentModalService)}/dependencies?time=15m`);
+                const data = await response.json();
+
+                // Render upstream (what calls this service)
+                if (data.upstream && data.upstream.length > 0) {
+                    upstreamDiv.innerHTML = data.upstream.map(dep => `
+                        <div class="dep-item" onclick="openServiceModal('${escapeHtml(dep.dependent)}')">
+                            <div class="dep-name">
+                                <span class="dep-type-badge ${dep.dep_type}">${dep.dep_type}</span>
+                                ${escapeHtml(dep.dependent)}
+                            </div>
+                            <span class="dep-calls">${dep.call_count} calls</span>
+                        </div>
+                    `).join('');
+                } else {
+                    upstreamDiv.innerHTML = '<div class="empty-state">No upstream dependencies found</div>';
+                }
+
+                // Render downstream (what this service calls)
+                if (data.downstream && data.downstream.length > 0) {
+                    downstreamDiv.innerHTML = data.downstream.map(dep => `
+                        <div class="dep-item" onclick="${dep.dep_type === 'database' ? `openDatabaseModal('${escapeHtml(dep.dependency)}')` : `openServiceModal('${escapeHtml(dep.dependency)}')`}">
+                            <div class="dep-name">
+                                <span class="dep-type-badge ${dep.dep_type}">${dep.dep_type}</span>
+                                ${escapeHtml(dep.dependency)}
+                            </div>
+                            <span class="dep-calls">${dep.call_count} calls</span>
+                        </div>
+                    `).join('');
+                } else {
+                    downstreamDiv.innerHTML = '<div class="empty-state">No downstream dependencies found</div>';
+                }
+            } catch (error) {
+                console.error('Failed to load dependencies:', error);
+                upstreamDiv.innerHTML = '<div class="empty-state">Error loading dependencies</div>';
+                downstreamDiv.innerHTML = '<div class="empty-state">Error loading dependencies</div>';
             }
         }
 
