@@ -338,35 +338,55 @@ def system_status():
     }
 
     # Get service health - discover from 1 hour, but calculate stats for selected window
-    # This ensures services are always shown even with no recent activity
-    service_query = f"""
-    WITH all_services AS (
-        SELECT DISTINCT service_name
-        FROM traces_otel_analytic
-        WHERE start_time > NOW() - INTERVAL '1' HOUR
-    ),
-    recent_stats AS (
-        SELECT service_name,
-               COUNT(*) as total_spans,
-               SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) as errors,
-               ROUND(100.0 * SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) as error_pct,
-               ROUND(AVG(duration_ns / 1000000.0), 2) as avg_latency_ms
-        FROM traces_otel_analytic
-        WHERE start_time > NOW() - INTERVAL {interval}
-        GROUP BY service_name
-    )
-    SELECT a.service_name,
-           COALESCE(r.total_spans, 0) as total_spans,
-           COALESCE(r.errors, 0) as errors,
-           r.error_pct,
-           r.avg_latency_ms
-    FROM all_services a
-    LEFT JOIN recent_stats r ON a.service_name = r.service_name
-    ORDER BY COALESCE(r.total_spans, 0) DESC
+    # Use two queries and merge in Python for better compatibility
+
+    # First: discover all services from the last hour
+    all_services_query = """
+    SELECT DISTINCT service_name
+    FROM traces_otel_analytic
+    WHERE start_time > NOW() - INTERVAL '1' HOUR
     """
-    result = executor.execute_query(service_query)
+    all_services = set()
+    result = executor.execute_query(all_services_query)
     if result['success']:
-        status['services'] = result['rows']
+        all_services = {row['service_name'] for row in result['rows']}
+
+    # Second: get stats for the selected time window
+    stats_query = f"""
+    SELECT service_name,
+           COUNT(*) as total_spans,
+           SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) as errors,
+           ROUND(100.0 * SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) as error_pct,
+           ROUND(AVG(duration_ns / 1000000.0), 2) as avg_latency_ms
+    FROM traces_otel_analytic
+    WHERE start_time > NOW() - INTERVAL {interval}
+    GROUP BY service_name
+    ORDER BY total_spans DESC
+    """
+    stats_by_service = {}
+    result = executor.execute_query(stats_query)
+    if result['success']:
+        for row in result['rows']:
+            stats_by_service[row['service_name']] = row
+
+    # Merge: all discovered services with their stats (or zeros if no recent activity)
+    services_list = []
+    for svc in all_services:
+        if svc in stats_by_service:
+            services_list.append(stats_by_service[svc])
+        else:
+            # Service exists but has no activity in selected time window
+            services_list.append({
+                'service_name': svc,
+                'total_spans': 0,
+                'errors': 0,
+                'error_pct': None,
+                'avg_latency_ms': None
+            })
+
+    # Sort by total_spans descending
+    services_list.sort(key=lambda x: x['total_spans'], reverse=True)
+    status['services'] = services_list
 
     # Get database status
     db_query = """
