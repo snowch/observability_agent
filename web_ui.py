@@ -186,9 +186,53 @@ def chat():
             "properties": {"sql": {"type": "string", "description": "The SQL SELECT query"}},
             "required": ["sql"]
         }
+    }, {
+        "name": "generate_chart",
+        "description": """Generate a chart/graph to visualize data. Use this when the user asks for visualizations, trends, or graphs.
+
+The chart will be rendered in the chat interface. Supported chart types:
+- line: For time series data (latency over time, error rates over time)
+- bar: For comparing values across categories (errors by service)
+- doughnut: For showing proportions (request distribution)
+
+IMPORTANT: Always provide data sorted by the x-axis (usually time) for line charts.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "chart_type": {
+                    "type": "string",
+                    "enum": ["line", "bar", "doughnut"],
+                    "description": "Type of chart to generate"
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Chart title"
+                },
+                "labels": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "X-axis labels (categories or time points)"
+                },
+                "datasets": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "label": {"type": "string", "description": "Dataset name (shown in legend)"},
+                            "data": {"type": "array", "items": {"type": "number"}, "description": "Data values"},
+                            "color": {"type": "string", "description": "Color (optional, e.g., '#00d9ff' or 'red')"}
+                        },
+                        "required": ["label", "data"]
+                    },
+                    "description": "One or more data series to plot"
+                }
+            },
+            "required": ["chart_type", "title", "labels", "datasets"]
+        }
     }]
 
     executed_queries = []
+    generated_charts = []
 
     try:
         response = client.messages.create(
@@ -214,6 +258,19 @@ def chat():
                             "tool_use_id": content_block.id,
                             "content": json.dumps(result, default=str)
                         })
+                    elif content_block.name == "generate_chart":
+                        chart_data = {
+                            "chart_type": content_block.input.get("chart_type", "line"),
+                            "title": content_block.input.get("title", "Chart"),
+                            "labels": content_block.input.get("labels", []),
+                            "datasets": content_block.input.get("datasets", [])
+                        }
+                        generated_charts.append(chart_data)
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": content_block.id,
+                            "content": json.dumps({"success": True, "message": "Chart generated successfully"})
+                        })
 
             conversation_history.append({"role": "assistant", "content": response.content})
             conversation_history.append({"role": "user", "content": tool_results})
@@ -236,7 +293,8 @@ def chat():
 
         return jsonify({
             'response': final_response,
-            'queries': executed_queries
+            'queries': executed_queries,
+            'charts': generated_charts
         })
 
     except Exception as e:
@@ -325,6 +383,90 @@ def execute_query():
     executor = get_query_executor()
     result = executor.execute_query(sql)
     return jsonify(result)
+
+
+@app.route('/api/service/<service_name>', methods=['GET'])
+def service_details(service_name):
+    """Get detailed metrics for a specific service."""
+    executor = get_query_executor()
+    time_range = request.args.get('range', '1')  # hours
+
+    data = {
+        'service_name': service_name,
+        'latency_history': [],
+        'error_history': [],
+        'throughput_history': [],
+        'recent_errors': [],
+        'top_operations': []
+    }
+
+    # Latency over time (1-minute buckets)
+    latency_query = f"""
+    SELECT
+        date_trunc('minute', start_time) as time_bucket,
+        ROUND(AVG(duration_ns / 1000000.0), 2) as avg_latency_ms,
+        ROUND(MAX(duration_ns / 1000000.0), 2) as max_latency_ms,
+        COUNT(*) as request_count
+    FROM traces_otel_analytic
+    WHERE service_name = '{service_name}'
+      AND start_time > NOW() - INTERVAL '{time_range}' HOUR
+    GROUP BY date_trunc('minute', start_time)
+    ORDER BY time_bucket
+    """
+    result = executor.execute_query(latency_query)
+    if result['success']:
+        data['latency_history'] = result['rows']
+
+    # Error rate over time
+    error_query = f"""
+    SELECT
+        date_trunc('minute', start_time) as time_bucket,
+        COUNT(*) as total,
+        SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) as errors,
+        ROUND(100.0 * SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) / COUNT(*), 2) as error_pct
+    FROM traces_otel_analytic
+    WHERE service_name = '{service_name}'
+      AND start_time > NOW() - INTERVAL '{time_range}' HOUR
+    GROUP BY date_trunc('minute', start_time)
+    ORDER BY time_bucket
+    """
+    result = executor.execute_query(error_query)
+    if result['success']:
+        data['error_history'] = result['rows']
+
+    # Recent errors for this service
+    recent_errors_query = f"""
+    SELECT span_name, status_code, start_time,
+           duration_ns / 1000000.0 as duration_ms
+    FROM traces_otel_analytic
+    WHERE service_name = '{service_name}'
+      AND status_code = 'ERROR'
+      AND start_time > NOW() - INTERVAL '{time_range}' HOUR
+    ORDER BY start_time DESC
+    LIMIT 10
+    """
+    result = executor.execute_query(recent_errors_query)
+    if result['success']:
+        data['recent_errors'] = result['rows']
+
+    # Top operations by volume
+    top_ops_query = f"""
+    SELECT span_name,
+           COUNT(*) as call_count,
+           ROUND(AVG(duration_ns / 1000000.0), 2) as avg_latency_ms,
+           ROUND(100.0 * SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) / COUNT(*), 2) as error_pct
+    FROM traces_otel_analytic
+    WHERE service_name = '{service_name}'
+      AND start_time > NOW() - INTERVAL '{time_range}' HOUR
+    GROUP BY span_name
+    ORDER BY call_count DESC
+    LIMIT 10
+    """
+    result = executor.execute_query(top_ops_query)
+    if result['success']:
+        data['top_operations'] = result['rows']
+
+    return jsonify(data)
 
 
 # =============================================================================
