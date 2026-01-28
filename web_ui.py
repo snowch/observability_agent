@@ -951,6 +951,72 @@ def service_metrics(service_name):
         return jsonify({'metrics': [], 'error': result.get('error')})
 
 
+@app.route('/api/service/<service_name>/dependencies', methods=['GET'])
+def service_dependencies(service_name):
+    """Get upstream and downstream dependencies for a service."""
+    executor = get_query_executor()
+    time_param = request.args.get('time', '15m')
+
+    # Parse time parameter
+    time_value = int(time_param[:-1])
+    time_unit = time_param[-1]
+    if time_unit == 's':
+        interval = f"'{time_value}' SECOND"
+    elif time_unit == 'm':
+        interval = f"'{time_value}' MINUTE"
+    elif time_unit == 'h':
+        interval = f"'{time_value}' HOUR"
+    else:
+        interval = "'15' MINUTE"
+
+    # Find services this service calls (downstream/dependencies)
+    downstream_query = f"""
+    SELECT DISTINCT
+        COALESCE(child.db_system, child.service_name) as dependency,
+        CASE WHEN child.db_system IS NOT NULL THEN 'database' ELSE 'service' END as dep_type,
+        COUNT(*) as call_count
+    FROM traces_otel_analytic parent
+    JOIN traces_otel_analytic child ON parent.span_id = child.parent_span_id
+        AND parent.trace_id = child.trace_id
+    WHERE parent.service_name = '{service_name}'
+      AND (child.service_name != '{service_name}' OR child.db_system IS NOT NULL)
+      AND parent.start_time > NOW() - INTERVAL {interval}
+    GROUP BY COALESCE(child.db_system, child.service_name),
+             CASE WHEN child.db_system IS NOT NULL THEN 'database' ELSE 'service' END
+    ORDER BY call_count DESC
+    LIMIT 20
+    """
+
+    # Find services that call this service (upstream/dependents)
+    upstream_query = f"""
+    SELECT DISTINCT
+        parent.service_name as dependent,
+        'service' as dep_type,
+        COUNT(*) as call_count
+    FROM traces_otel_analytic parent
+    JOIN traces_otel_analytic child ON parent.span_id = child.parent_span_id
+        AND parent.trace_id = child.trace_id
+    WHERE child.service_name = '{service_name}'
+      AND parent.service_name != '{service_name}'
+      AND child.start_time > NOW() - INTERVAL {interval}
+    GROUP BY parent.service_name
+    ORDER BY call_count DESC
+    LIMIT 20
+    """
+
+    data = {'upstream': [], 'downstream': []}
+
+    result = executor.execute_query(downstream_query)
+    if result['success']:
+        data['downstream'] = result['rows']
+
+    result = executor.execute_query(upstream_query)
+    if result['success']:
+        data['upstream'] = result['rows']
+
+    return jsonify(data)
+
+
 @app.route('/api/service/<service_name>/operations', methods=['GET'])
 def service_operations(service_name):
     """Get top operations for a service with configurable time window."""
