@@ -402,6 +402,36 @@ ALWAYS trace to the leaf of the dependency tree!
 - ALWAYS check db_system column when investigating slowness or timeouts
 - Check for ABSENCE of spans, not just presence of errors
 
+## Service Name Discovery (CRITICAL)
+
+Service names in the database may NOT match what users say. Users might say "ad service" but the actual service_name could be "ad", "adservice", "ad-service", or "oteldemo-adservice".
+
+**ALWAYS discover the exact service name FIRST before querying for a specific service:**
+
+```sql
+SELECT DISTINCT service_name
+FROM traces_otel_analytic
+WHERE service_name LIKE '%ad%'
+  AND start_time > NOW() - INTERVAL '1' HOUR
+LIMIT 20
+```
+
+Or list all services to find the right one:
+```sql
+SELECT DISTINCT service_name, COUNT(*) as span_count
+FROM traces_otel_analytic
+WHERE start_time > NOW() - INTERVAL '1' HOUR
+GROUP BY service_name
+ORDER BY span_count DESC
+```
+
+**Common patterns:**
+- User says "ad service" → Look for: `WHERE service_name LIKE '%ad%'`
+- User says "checkout" → Look for: `WHERE service_name LIKE '%checkout%'`
+- User says "frontend" → Look for: `WHERE service_name LIKE '%frontend%'`
+
+**NEVER assume the exact service name.** If a query returns no results, check if you have the right service_name by listing available services first.
+
 ## Service Health Reporting
 
 When summarizing service health status, use these EXPLICIT guidelines:
