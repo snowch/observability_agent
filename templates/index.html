@@ -6,6 +6,7 @@
     <title>Observability Diagnostic Chat</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.6/dist/vis-network.min.js"></script>
     <style>
         :root {
             --bg-primary: #0a0a0f;
@@ -1205,6 +1206,66 @@
         .metric-ok { color: var(--accent-success); }
         .metric-warn { color: var(--accent-warning); }
         .metric-error { color: var(--accent-error); }
+
+        /* Topology graph styling */
+        .topology-container {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 16px;
+            margin: 16px 0;
+            max-width: 800px;
+        }
+
+        .topology-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--accent-primary);
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .topology-title::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            background: var(--accent-primary);
+            border-radius: 50%;
+        }
+
+        .topology-graph {
+            height: 400px;
+            background: var(--bg-primary);
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+        }
+
+        .topology-legend {
+            display: flex;
+            gap: 16px;
+            margin-top: 12px;
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .legend-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .legend-dot.service { background: #00d9ff; }
+        .legend-dot.database { background: #7c3aed; }
+        .legend-dot.external { background: #f59e0b; }
+        .legend-dot.error { background: #ef4444; }
     </style>
 </head>
 <body>
@@ -1289,6 +1350,7 @@
                         <li>"Show me errors in the last 5 minutes"</li>
                         <li>"Show me a graph of latency for checkout service"</li>
                         <li>"Chart error rates by service over the last hour"</li>
+                        <li>"Show me the topology for PostgreSQL - what depends on it?"</li>
                     </ul>
                     <p>What would you like to investigate?</p>
                 </div>
@@ -1681,7 +1743,7 @@
                 updateLoadingQueries(loadingDiv, completedQueries);
             } else if (data.type === 'complete') {
                 removeLoading(loadingId);
-                addMessage('assistant', data.response, data.queries, data.charts);
+                addMessage('assistant', data.response, data.queries, data.charts, data.topologies);
             } else if (data.type === 'error') {
                 removeLoading(loadingId);
                 addMessage('assistant', `Error: ${data.message}`);
@@ -1732,7 +1794,7 @@
             ).join('');
         }
 
-        function addMessage(role, content, queries = [], charts = []) {
+        function addMessage(role, content, queries = [], charts = [], topologies = []) {
             const container = document.getElementById('chat-container');
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${role}`;
@@ -1762,10 +1824,31 @@
                 }).join('');
             }
 
+            let topologiesHtml = '';
+            if (topologies && topologies.length > 0) {
+                topologiesHtml = topologies.map((topo, i) => {
+                    const topoId = `topology-${Date.now()}-${i}`;
+                    setTimeout(() => renderTopology(topoId, topo), 100);
+                    return `
+                        <div class="topology-container">
+                            <div class="topology-title">${escapeHtml(topo.title)}</div>
+                            <div class="topology-graph" id="${topoId}"></div>
+                            <div class="topology-legend">
+                                <div class="legend-item"><div class="legend-dot service"></div>Service</div>
+                                <div class="legend-item"><div class="legend-dot database"></div>Database</div>
+                                <div class="legend-item"><div class="legend-dot external"></div>External</div>
+                                <div class="legend-item"><div class="legend-dot error"></div>Error</div>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            }
+
             messageDiv.innerHTML = `
                 <div class="message-label">${role === 'user' ? 'You' : 'Assistant'}</div>
                 <div class="message-content">${formatMarkdown(content)}</div>
                 ${chartsHtml}
+                ${topologiesHtml}
                 ${queriesHtml}
             `;
 
@@ -1808,6 +1891,77 @@
                     } : undefined
                 }
             });
+        }
+
+        function renderTopology(containerId, topoData) {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+
+            // Node colors by type and status
+            const nodeColors = {
+                service: { background: '#00d9ff', border: '#00a3cc', font: '#ffffff' },
+                database: { background: '#7c3aed', border: '#5b21b6', font: '#ffffff' },
+                external: { background: '#f59e0b', border: '#d97706', font: '#ffffff' }
+            };
+
+            const statusColors = {
+                healthy: '#10b981',
+                warning: '#f59e0b',
+                error: '#ef4444'
+            };
+
+            // Convert nodes to vis.js format
+            const nodes = new vis.DataSet(topoData.nodes.map(node => {
+                const typeColor = nodeColors[node.type] || nodeColors.service;
+                const borderColor = node.status === 'error' ? statusColors.error :
+                                   node.status === 'warning' ? statusColors.warning : typeColor.border;
+                return {
+                    id: node.id,
+                    label: node.label,
+                    color: {
+                        background: typeColor.background,
+                        border: borderColor,
+                        highlight: { background: typeColor.background, border: '#ffffff' }
+                    },
+                    font: { color: typeColor.font, size: 12, face: 'Inter' },
+                    shape: node.type === 'database' ? 'database' : 'box',
+                    borderWidth: node.status ? 3 : 2,
+                    shadow: true
+                };
+            }));
+
+            // Convert edges to vis.js format
+            const edges = new vis.DataSet(topoData.edges.map(edge => ({
+                from: edge.from,
+                to: edge.to,
+                label: edge.label || '',
+                arrows: 'to',
+                color: { color: '#606070', highlight: '#00d9ff' },
+                font: { color: '#a0a0b0', size: 10, face: 'Inter', strokeWidth: 0 },
+                smooth: { type: 'cubicBezier', roundness: 0.5 }
+            })));
+
+            // Create the network
+            const options = {
+                physics: {
+                    stabilization: { iterations: 100 },
+                    barnesHut: {
+                        gravitationalConstant: -2000,
+                        centralGravity: 0.3,
+                        springLength: 150,
+                        springConstant: 0.04
+                    }
+                },
+                layout: {
+                    improvedLayout: true
+                },
+                interaction: {
+                    hover: true,
+                    tooltipDelay: 200
+                }
+            };
+
+            new vis.Network(container, { nodes, edges }, options);
         }
 
         function addLoading() {

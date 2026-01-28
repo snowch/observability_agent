@@ -210,6 +210,71 @@ IMPORTANT: Always provide data sorted by the x-axis (usually time) for line char
             },
             "required": ["chart_type", "title", "labels", "datasets"]
         }
+    }, {
+        "name": "generate_topology",
+        "description": """Generate a service topology/dependency graph visualization. Use this when the user asks about:
+- Service dependencies or topology
+- What depends on a service/database
+- What a service/database depends on
+- Architecture or call flow visualization
+
+The topology will be rendered as an interactive network graph. Nodes represent services or databases, edges represent call relationships.
+
+To find dependencies, query traces_otel_analytic:
+- For service-to-service calls: Look at parent_span_id relationships where services differ
+- For database dependencies: Look at db_system field to find which services call which databases
+
+Example query to find service dependencies:
+SELECT DISTINCT
+    parent.service_name as caller,
+    child.service_name as callee
+FROM traces_otel_analytic child
+JOIN traces_otel_analytic parent ON child.parent_span_id = parent.span_id AND child.trace_id = parent.trace_id
+WHERE child.service_name != parent.service_name
+  AND child.start_time > NOW() - INTERVAL '10' MINUTE
+
+Example query to find database dependencies:
+SELECT DISTINCT service_name, db_system
+FROM traces_otel_analytic
+WHERE db_system IS NOT NULL AND db_system != ''
+  AND start_time > NOW() - INTERVAL '10' MINUTE""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Title for the topology graph"
+                },
+                "nodes": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string", "description": "Unique node identifier"},
+                            "label": {"type": "string", "description": "Display label for the node"},
+                            "type": {"type": "string", "enum": ["service", "database", "external"], "description": "Node type for styling"},
+                            "status": {"type": "string", "enum": ["healthy", "warning", "error"], "description": "Health status (optional)"}
+                        },
+                        "required": ["id", "label", "type"]
+                    },
+                    "description": "List of nodes (services, databases, external systems)"
+                },
+                "edges": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "from": {"type": "string", "description": "Source node ID"},
+                            "to": {"type": "string", "description": "Target node ID"},
+                            "label": {"type": "string", "description": "Edge label (optional, e.g., call count)"}
+                        },
+                        "required": ["from", "to"]
+                    },
+                    "description": "List of edges (call relationships between nodes)"
+                }
+            },
+            "required": ["title", "nodes", "edges"]
+        }
     }]
 
 
@@ -238,6 +303,7 @@ def chat_stream():
 
         executed_queries = []
         generated_charts = []
+        generated_topologies = []
         iteration = 0
         max_iterations = 10  # Safety limit
 
@@ -300,6 +366,22 @@ def chat_stream():
                                 "content": json.dumps({"success": True, "message": "Chart generated successfully"})
                             })
 
+                        elif content_block.name == "generate_topology":
+                            topo_title = content_block.input.get("title", "Topology")
+                            yield f"data: {json.dumps({'type': 'status', 'message': f'Generating topology: {topo_title}...', 'step': iteration + 1})}\n\n"
+
+                            topology_data = {
+                                "title": topo_title,
+                                "nodes": content_block.input.get("nodes", []),
+                                "edges": content_block.input.get("edges", [])
+                            }
+                            generated_topologies.append(topology_data)
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": content_block.id,
+                                "content": json.dumps({"success": True, "message": "Topology generated successfully"})
+                            })
+
                 conversation_history.append({"role": "assistant", "content": response.content})
                 conversation_history.append({"role": "user", "content": tool_results})
 
@@ -325,7 +407,7 @@ def chat_stream():
             conversation_history.append({"role": "assistant", "content": final_response})
 
             # Send final result (use default=str to handle Decimal types from Trino)
-            yield f"data: {json.dumps({'type': 'complete', 'response': final_response, 'queries': executed_queries, 'charts': generated_charts}, default=str)}\n\n"
+            yield f"data: {json.dumps({'type': 'complete', 'response': final_response, 'queries': executed_queries, 'charts': generated_charts, 'topologies': generated_topologies}, default=str)}\n\n"
 
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
@@ -360,6 +442,7 @@ def chat():
 
     executed_queries = []
     generated_charts = []
+    generated_topologies = []
 
     try:
         response = client.messages.create(
@@ -398,6 +481,18 @@ def chat():
                             "tool_use_id": content_block.id,
                             "content": json.dumps({"success": True, "message": "Chart generated successfully"})
                         })
+                    elif content_block.name == "generate_topology":
+                        topology_data = {
+                            "title": content_block.input.get("title", "Topology"),
+                            "nodes": content_block.input.get("nodes", []),
+                            "edges": content_block.input.get("edges", [])
+                        }
+                        generated_topologies.append(topology_data)
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": content_block.id,
+                            "content": json.dumps({"success": True, "message": "Topology generated successfully"})
+                        })
 
             conversation_history.append({"role": "assistant", "content": response.content})
             conversation_history.append({"role": "user", "content": tool_results})
@@ -421,7 +516,8 @@ def chat():
         return jsonify({
             'response': final_response,
             'queries': executed_queries,
-            'charts': generated_charts
+            'charts': generated_charts,
+            'topologies': generated_topologies
         })
 
     except Exception as e:
