@@ -1064,6 +1064,103 @@
             overflow-y: auto;
             margin-top: 8px;
         }
+
+        /* Progress indicator for chat */
+        .progress-container {
+            margin-top: 12px;
+            padding: 12px 16px;
+            background: var(--bg-tertiary);
+            border-radius: 10px;
+            border: 1px solid var(--border-color);
+        }
+
+        .progress-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 8px;
+        }
+
+        .progress-spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid var(--border-color);
+            border-top-color: var(--accent-primary);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        .progress-step {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--accent-primary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .progress-message {
+            font-size: 13px;
+            color: var(--text-primary);
+            font-weight: 500;
+        }
+
+        .progress-detail {
+            font-size: 11px;
+            color: var(--text-muted);
+            font-family: 'JetBrains Mono', monospace;
+            margin-top: 6px;
+            padding: 8px;
+            background: var(--bg-primary);
+            border-radius: 6px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .progress-steps {
+            display: flex;
+            gap: 6px;
+            margin-top: 10px;
+        }
+
+        .progress-step-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--border-color);
+            transition: all 0.3s;
+        }
+
+        .progress-step-dot.active {
+            background: var(--accent-primary);
+            box-shadow: 0 0 8px var(--accent-primary);
+        }
+
+        .progress-step-dot.completed {
+            background: var(--accent-success);
+        }
+
+        .query-progress-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 6px;
+            padding: 6px 8px;
+            background: var(--bg-primary);
+            border-radius: 6px;
+        }
+
+        .query-progress-item .check {
+            color: var(--accent-success);
+            font-weight: bold;
+        }
+
+        .query-progress-item .rows {
+            color: var(--accent-primary);
+            font-family: 'JetBrains Mono', monospace;
+        }
     </style>
 </head>
 <body>
@@ -1472,21 +1569,37 @@
             input.value = '';
 
             const loadingId = addLoading();
+            let completedQueries = [];
 
             try {
-                const response = await fetch('/api/chat', {
+                const response = await fetch('/api/chat/stream', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ message, session_id: sessionId })
                 });
 
-                const data = await response.json();
-                removeLoading(loadingId);
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
 
-                if (data.error) {
-                    addMessage('assistant', `Error: ${data.error}`);
-                } else {
-                    addMessage('assistant', data.response, data.queries, data.charts);
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.slice(6));
+                                handleStreamEvent(loadingId, data, completedQueries);
+                            } catch (e) {
+                                console.error('Failed to parse SSE data:', e);
+                            }
+                        }
+                    }
                 }
 
             } catch (error) {
@@ -1497,6 +1610,72 @@
             isLoading = false;
             document.getElementById('send-btn').disabled = false;
             refreshStatus();
+        }
+
+        function handleStreamEvent(loadingId, data, completedQueries) {
+            const loadingDiv = document.getElementById(loadingId);
+            if (!loadingDiv) return;
+
+            if (data.type === 'status') {
+                updateLoadingProgress(loadingDiv, data.message, data.step, data.detail, completedQueries);
+            } else if (data.type === 'query_result') {
+                completedQueries.push({
+                    index: data.query_index,
+                    rows: data.row_count,
+                    success: data.success
+                });
+                updateLoadingQueries(loadingDiv, completedQueries);
+            } else if (data.type === 'complete') {
+                removeLoading(loadingId);
+                addMessage('assistant', data.response, data.queries, data.charts);
+            } else if (data.type === 'error') {
+                removeLoading(loadingId);
+                addMessage('assistant', `Error: ${data.message}`);
+            }
+        }
+
+        function updateLoadingProgress(loadingDiv, message, step, detail, completedQueries) {
+            const progressContainer = loadingDiv.querySelector('.progress-container');
+            if (!progressContainer) return;
+
+            const progressMessage = progressContainer.querySelector('.progress-message');
+            const progressDetail = progressContainer.querySelector('.progress-detail');
+            const stepDots = progressContainer.querySelectorAll('.progress-step-dot');
+
+            if (progressMessage) progressMessage.textContent = message;
+
+            if (detail) {
+                if (progressDetail) {
+                    progressDetail.textContent = detail;
+                    progressDetail.style.display = 'block';
+                }
+            } else if (progressDetail) {
+                progressDetail.style.display = 'none';
+            }
+
+            // Update step dots
+            stepDots.forEach((dot, i) => {
+                if (i < step - 1) {
+                    dot.className = 'progress-step-dot completed';
+                } else if (i === step - 1) {
+                    dot.className = 'progress-step-dot active';
+                } else {
+                    dot.className = 'progress-step-dot';
+                }
+            });
+        }
+
+        function updateLoadingQueries(loadingDiv, completedQueries) {
+            const queriesContainer = loadingDiv.querySelector('.queries-progress');
+            if (!queriesContainer) return;
+
+            queriesContainer.innerHTML = completedQueries.map(q =>
+                `<div class="query-progress-item">
+                    <span class="check">${q.success ? '✓' : '✗'}</span>
+                    <span>Query ${q.index + 1}</span>
+                    <span class="rows">${q.rows} rows</span>
+                </div>`
+            ).join('');
         }
 
         function addMessage(role, content, queries = [], charts = []) {
@@ -1586,9 +1765,21 @@
             loadingDiv.innerHTML = `
                 <div class="message-label">Assistant</div>
                 <div class="message-content">
-                    <div class="loading">
-                        <div class="loading-dots"><span></span><span></span><span></span></div>
-                        <span>Investigating...</span>
+                    <div class="progress-container">
+                        <div class="progress-header">
+                            <div class="progress-spinner"></div>
+                            <span class="progress-step">Working</span>
+                        </div>
+                        <div class="progress-message">Starting analysis...</div>
+                        <div class="progress-detail" style="display: none;"></div>
+                        <div class="queries-progress"></div>
+                        <div class="progress-steps">
+                            <div class="progress-step-dot active"></div>
+                            <div class="progress-step-dot"></div>
+                            <div class="progress-step-dot"></div>
+                            <div class="progress-step-dot"></div>
+                            <div class="progress-step-dot"></div>
+                        </div>
                     </div>
                 </div>
             `;
