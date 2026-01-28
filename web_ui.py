@@ -324,8 +324,8 @@ def chat_stream():
 
             conversation_history.append({"role": "assistant", "content": final_response})
 
-            # Send final result
-            yield f"data: {json.dumps({'type': 'complete', 'response': final_response, 'queries': executed_queries, 'charts': generated_charts})}\n\n"
+            # Send final result (use default=str to handle Decimal types from Trino)
+            yield f"data: {json.dumps({'type': 'complete', 'response': final_response, 'queries': executed_queries, 'charts': generated_charts}, default=str)}\n\n"
 
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
