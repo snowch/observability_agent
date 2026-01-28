@@ -1207,6 +1207,61 @@
         .metric-warn { color: var(--accent-warning); }
         .metric-error { color: var(--accent-error); }
 
+        .host-item:hover {
+            background: var(--bg-secondary);
+            transition: background 0.2s ease;
+        }
+
+        /* Host modal styling */
+        .host-detail-metrics {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+        }
+
+        .host-metric-card {
+            background: var(--bg-primary);
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .host-metric-card .value {
+            font-size: 32px;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .host-metric-card .label {
+            font-size: 12px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            margin-top: 8px;
+        }
+
+        .host-info {
+            display: grid;
+            gap: 12px;
+        }
+
+        .host-info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 12px;
+            background: var(--bg-primary);
+            border-radius: 8px;
+        }
+
+        .host-info-label {
+            color: var(--text-muted);
+            font-size: 12px;
+        }
+
+        .host-info-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+        }
+
         /* Topology graph styling */
         .topology-container {
             background: var(--bg-secondary);
@@ -1775,28 +1830,45 @@
                     <button class="modal-close" onclick="closeDatabaseModal()">&times;</button>
                 </div>
             </div>
+            <div class="modal-tabs" id="db-modal-tabs">
+                <div class="modal-tab active" onclick="switchDbModalTab('charts')">Charts</div>
+                <div class="modal-tab" onclick="switchDbModalTab('deps')">Dependents</div>
+            </div>
             <div class="modal-body" id="db-modal-body">
-                <div class="chart-row">
-                    <div class="chart-card">
-                        <h4>Query Latency Over Time</h4>
-                        <canvas id="db-latency-chart"></canvas>
+                <!-- Charts Tab -->
+                <div class="modal-tab-content active" id="db-tab-charts">
+                    <div class="chart-row">
+                        <div class="chart-card">
+                            <h4>Query Latency Over Time</h4>
+                            <canvas id="db-latency-chart"></canvas>
+                        </div>
+                        <div class="chart-card">
+                            <h4>Query Volume Over Time</h4>
+                            <canvas id="db-volume-chart"></canvas>
+                        </div>
                     </div>
-                    <div class="chart-card">
-                        <h4>Query Volume Over Time</h4>
-                        <canvas id="db-volume-chart"></canvas>
+                    <div class="chart-row">
+                        <div class="chart-card">
+                            <h4>Error Rate Over Time</h4>
+                            <canvas id="db-error-chart"></canvas>
+                        </div>
+                        <div class="chart-card">
+                            <h4>Slowest Queries</h4>
+                            <table class="ops-table" id="db-queries-table">
+                                <thead><tr><th>Service</th><th>Operation</th><th>Avg Latency</th><th>Error %</th></tr></thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
-                <div class="chart-row">
+
+                <!-- Dependents Tab -->
+                <div class="modal-tab-content" id="db-tab-deps">
                     <div class="chart-card">
-                        <h4>Error Rate Over Time</h4>
-                        <canvas id="db-error-chart"></canvas>
-                    </div>
-                    <div class="chart-card">
-                        <h4>Slowest Queries</h4>
-                        <table class="ops-table" id="db-queries-table">
-                            <thead><tr><th>Service</th><th>Operation</th><th>Avg Latency</th><th>Error %</th></tr></thead>
-                            <tbody></tbody>
-                        </table>
+                        <h4>Services Using This Database</h4>
+                        <div class="deps-list" id="db-dependents">
+                            <div class="empty-state">Loading...</div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1872,6 +1944,68 @@
         </div>
     </div>
 
+    <!-- Host Drill-down Modal -->
+    <div class="modal-overlay" id="host-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title-row">
+                    <span class="modal-type-badge host" style="background: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%);">Host</span>
+                    <h2 id="host-modal-title">Loading...</h2>
+                </div>
+                <div class="modal-refresh-controls">
+                    <div class="auto-refresh-indicator" id="host-modal-auto-indicator">
+                        <span class="dot"></span>
+                        <span>Auto-refresh off</span>
+                    </div>
+                    <div class="toggle-container">
+                        <span class="toggle-label">Auto</span>
+                        <div class="toggle-switch" id="host-modal-auto-toggle" onclick="toggleHostModalAutoRefresh()"></div>
+                    </div>
+                    <button class="modal-refresh-btn" id="host-modal-refresh-btn" onclick="refreshHostModal()">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+                        </svg>
+                        Refresh
+                    </button>
+                    <button class="modal-close" onclick="closeHostModal()">&times;</button>
+                </div>
+            </div>
+            <div class="modal-tabs" id="host-modal-tabs">
+                <div class="modal-tab active" onclick="switchHostModalTab('metrics')">Metrics</div>
+                <div class="modal-tab" onclick="switchHostModalTab('services')">Services</div>
+            </div>
+            <div class="modal-body" id="host-modal-body">
+                <!-- Metrics Tab -->
+                <div class="modal-tab-content active" id="host-tab-metrics">
+                    <div class="chart-row">
+                        <div class="chart-card">
+                            <h4>Current Resource Usage</h4>
+                            <div class="host-detail-metrics" id="host-current-metrics">
+                                <div class="empty-state">Loading...</div>
+                            </div>
+                        </div>
+                        <div class="chart-card">
+                            <h4>Host Information</h4>
+                            <div class="host-info" id="host-info">
+                                <div class="empty-state">Loading...</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Services Tab -->
+                <div class="modal-tab-content" id="host-tab-services">
+                    <div class="chart-card">
+                        <h4>Services Running on This Host</h4>
+                        <div class="deps-list" id="host-services">
+                            <div class="empty-state">Loading...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
         const sessionId = 'session_' + Math.random().toString(36).substr(2, 9);
         let isLoading = false;
@@ -1887,6 +2021,9 @@
         let dbModalAutoRefresh = false;
         let dbModalRefreshInterval = null;
         let currentModalDatabase = null;
+        let hostModalAutoRefresh = false;
+        let hostModalRefreshInterval = null;
+        let currentModalHost = null;
         let availableServices = [];
         let availableDatabases = [];
         const REFRESH_INTERVAL = 15000; // 15 seconds for faster error detection
@@ -2482,7 +2619,7 @@
                         const diskClass = disk === '-' ? '' : (disk > 90 ? 'metric-error' : disk > 75 ? 'metric-warn' : 'metric-ok');
 
                         return `
-                            <div class="host-item">
+                            <div class="host-item" onclick="openHostModal('${escapeHtml(h.host_name)}')" style="cursor: pointer;">
                                 <div class="host-name">${escapeHtml(h.host_name)}</div>
                                 <div class="host-metrics">
                                     <div class="host-metric">
@@ -2583,6 +2720,8 @@
         function switchService(serviceName) {
             if (serviceName && serviceName !== currentModalService) {
                 currentModalService = serviceName;
+                // Reset to charts tab when switching services
+                switchModalTab('charts');
                 loadServiceData(serviceName);
             }
         }
@@ -2704,16 +2843,16 @@
             switchModalTab('charts');
         }
 
-        // Tab switching function
+        // Tab switching function for service modal
         function switchModalTab(tabName) {
-            // Update tab buttons
-            document.querySelectorAll('.modal-tabs .modal-tab').forEach(tab => {
+            // Update tab buttons (specific to service modal)
+            document.querySelectorAll('#service-modal .modal-tabs .modal-tab').forEach(tab => {
                 tab.classList.remove('active');
             });
-            document.querySelector(`.modal-tabs .modal-tab[onclick*="${tabName}"]`).classList.add('active');
+            document.querySelector(`#service-modal .modal-tabs .modal-tab[onclick*="${tabName}"]`).classList.add('active');
 
-            // Update tab content
-            document.querySelectorAll('.modal-tab-content').forEach(content => {
+            // Update tab content (specific to service modal)
+            document.querySelectorAll('#service-modal .modal-tab-content').forEach(content => {
                 content.classList.remove('active');
             });
             document.getElementById(`tab-${tabName}`).classList.add('active');
@@ -3054,6 +3193,60 @@
             stopDbModalAutoRefresh();
             currentModalDatabase = null;
             dbModalAutoRefresh = false;
+            // Reset to charts tab
+            switchDbModalTab('charts');
+        }
+
+        // Database modal tab switching
+        function switchDbModalTab(tabName) {
+            // Update tab buttons
+            document.querySelectorAll('#db-modal-tabs .modal-tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.querySelector(`#db-modal-tabs .modal-tab[onclick*="${tabName}"]`).classList.add('active');
+
+            // Update tab content
+            document.querySelectorAll('#db-modal-body .modal-tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            document.getElementById(`db-tab-${tabName}`).classList.add('active');
+
+            // Load data for the tab if needed
+            if (tabName === 'deps' && currentModalDatabase) {
+                loadDatabaseDependencies();
+            }
+        }
+
+        async function loadDatabaseDependencies() {
+            if (!currentModalDatabase) return;
+
+            const depsDiv = document.getElementById('db-dependents');
+            depsDiv.innerHTML = '<div class="empty-state">Loading...</div>';
+
+            try {
+                const response = await fetch(`/api/database/${encodeURIComponent(currentModalDatabase)}/dependencies?time=15m`);
+                const data = await response.json();
+
+                if (data.dependents && data.dependents.length > 0) {
+                    depsDiv.innerHTML = data.dependents.map(dep => `
+                        <div class="dep-item" onclick="openServiceModal('${escapeHtml(dep.dependent)}')">
+                            <div class="dep-name">
+                                <span class="dep-type-badge service">service</span>
+                                ${escapeHtml(dep.dependent)}
+                            </div>
+                            <div style="text-align: right;">
+                                <span class="dep-calls">${dep.call_count} calls</span>
+                                <span style="margin-left: 8px; color: ${dep.error_pct > 5 ? 'var(--accent-error)' : 'var(--text-muted)'}; font-size: 11px;">${dep.error_pct}% err</span>
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    depsDiv.innerHTML = '<div class="empty-state">No services found using this database</div>';
+                }
+            } catch (error) {
+                console.error('Failed to load database dependencies:', error);
+                depsDiv.innerHTML = '<div class="empty-state">Error loading dependencies</div>';
+            }
         }
 
         // Error Modal Functions
@@ -3110,6 +3303,197 @@
             document.getElementById('error-modal').classList.remove('active');
         }
 
+        // Host Modal Functions
+        async function openHostModal(hostName) {
+            currentModalHost = hostName;
+            document.getElementById('host-modal').classList.add('active');
+            document.getElementById('host-modal-title').textContent = hostName;
+
+            // Enable auto-refresh by default
+            hostModalAutoRefresh = true;
+            document.getElementById('host-modal-auto-toggle').classList.add('active');
+            const indicator = document.getElementById('host-modal-auto-indicator');
+            indicator.classList.add('active');
+            indicator.querySelector('span:last-child').textContent = 'Auto-refresh on';
+
+            // Reset to metrics tab
+            switchHostModalTab('metrics');
+            await loadHostData(hostName);
+            startHostModalAutoRefresh();
+        }
+
+        async function loadHostData(hostName) {
+            try {
+                const response = await fetch(`/api/host/${encodeURIComponent(hostName)}/services`);
+                const data = await response.json();
+
+                // Update current metrics display
+                const metricsDiv = document.getElementById('host-current-metrics');
+                if (data.current_metrics) {
+                    const m = data.current_metrics;
+                    const cpu = m.cpu_pct !== null ? m.cpu_pct : '-';
+                    const mem = m.memory_pct !== null ? m.memory_pct : '-';
+                    const disk = m.disk_pct !== null ? m.disk_pct : '-';
+
+                    const cpuClass = cpu === '-' ? '' : (cpu > 80 ? 'metric-error' : cpu > 60 ? 'metric-warn' : 'metric-ok');
+                    const memClass = mem === '-' ? '' : (mem > 85 ? 'metric-error' : mem > 70 ? 'metric-warn' : 'metric-ok');
+                    const diskClass = disk === '-' ? '' : (disk > 90 ? 'metric-error' : disk > 75 ? 'metric-warn' : 'metric-ok');
+
+                    metricsDiv.innerHTML = `
+                        <div class="host-metric-card">
+                            <div class="value ${cpuClass}">${cpu}%</div>
+                            <div class="label">CPU Utilization</div>
+                        </div>
+                        <div class="host-metric-card">
+                            <div class="value ${memClass}">${mem}%</div>
+                            <div class="label">Memory Utilization</div>
+                        </div>
+                        <div class="host-metric-card">
+                            <div class="value ${diskClass}">${disk}%</div>
+                            <div class="label">Disk Utilization</div>
+                        </div>
+                    `;
+                } else {
+                    metricsDiv.innerHTML = '<div class="empty-state">No metrics available</div>';
+                }
+
+                // Update host info
+                const infoDiv = document.getElementById('host-info');
+                if (data.host_info) {
+                    const info = data.host_info;
+                    infoDiv.innerHTML = `
+                        <div class="host-info-row">
+                            <span class="host-info-label">Hostname</span>
+                            <span class="host-info-value">${escapeHtml(hostName)}</span>
+                        </div>
+                        <div class="host-info-row">
+                            <span class="host-info-label">OS Type</span>
+                            <span class="host-info-value">${escapeHtml(info.os_type || 'Unknown')}</span>
+                        </div>
+                        <div class="host-info-row">
+                            <span class="host-info-label">Last Seen</span>
+                            <span class="host-info-value">${info.last_seen ? new Date(info.last_seen).toLocaleString() : '-'}</span>
+                        </div>
+                    `;
+                } else {
+                    infoDiv.innerHTML = `
+                        <div class="host-info-row">
+                            <span class="host-info-label">Hostname</span>
+                            <span class="host-info-value">${escapeHtml(hostName)}</span>
+                        </div>
+                    `;
+                }
+
+            } catch (error) {
+                console.error('Failed to load host data:', error);
+            }
+        }
+
+        async function loadHostServices() {
+            if (!currentModalHost) return;
+
+            const servicesDiv = document.getElementById('host-services');
+            servicesDiv.innerHTML = '<div class="empty-state">Loading...</div>';
+
+            try {
+                const response = await fetch(`/api/host/${encodeURIComponent(currentModalHost)}/services`);
+                const data = await response.json();
+
+                if (data.services && data.services.length > 0) {
+                    servicesDiv.innerHTML = data.services.map(svc => `
+                        <div class="dep-item" onclick="openServiceModal('${escapeHtml(svc.service_name)}')">
+                            <div class="dep-name">
+                                <span class="dep-type-badge service">service</span>
+                                ${escapeHtml(svc.service_name)}
+                            </div>
+                            <div style="text-align: right;">
+                                <span class="dep-calls">${svc.span_count} spans</span>
+                                <span style="margin-left: 8px; color: ${svc.error_pct > 5 ? 'var(--accent-error)' : 'var(--text-muted)'}; font-size: 11px;">${svc.error_pct}% err</span>
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    servicesDiv.innerHTML = '<div class="empty-state">No services found on this host</div>';
+                }
+            } catch (error) {
+                console.error('Failed to load host services:', error);
+                servicesDiv.innerHTML = '<div class="empty-state">Error loading services</div>';
+            }
+        }
+
+        function switchHostModalTab(tabName) {
+            // Update tab buttons
+            document.querySelectorAll('#host-modal-tabs .modal-tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.querySelector(`#host-modal-tabs .modal-tab[onclick*="${tabName}"]`).classList.add('active');
+
+            // Update tab content
+            document.querySelectorAll('#host-modal-body .modal-tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            document.getElementById(`host-tab-${tabName}`).classList.add('active');
+
+            // Load data for the tab if needed
+            if (tabName === 'services' && currentModalHost) {
+                loadHostServices();
+            }
+        }
+
+        function toggleHostModalAutoRefresh() {
+            hostModalAutoRefresh = !hostModalAutoRefresh;
+            const toggle = document.getElementById('host-modal-auto-toggle');
+            const indicator = document.getElementById('host-modal-auto-indicator');
+
+            toggle.classList.toggle('active', hostModalAutoRefresh);
+            indicator.classList.toggle('active', hostModalAutoRefresh);
+            indicator.querySelector('span:last-child').textContent = hostModalAutoRefresh ? 'Auto-refresh on' : 'Auto-refresh off';
+
+            if (hostModalAutoRefresh && currentModalHost) {
+                startHostModalAutoRefresh();
+            } else {
+                stopHostModalAutoRefresh();
+            }
+        }
+
+        function startHostModalAutoRefresh() {
+            if (hostModalRefreshInterval) clearInterval(hostModalRefreshInterval);
+            if (hostModalAutoRefresh && currentModalHost) {
+                hostModalRefreshInterval = setInterval(() => refreshHostModal(), REFRESH_INTERVAL);
+            }
+        }
+
+        function stopHostModalAutoRefresh() {
+            if (hostModalRefreshInterval) {
+                clearInterval(hostModalRefreshInterval);
+                hostModalRefreshInterval = null;
+            }
+        }
+
+        async function refreshHostModal() {
+            if (!currentModalHost) return;
+
+            const btn = document.getElementById('host-modal-refresh-btn');
+            btn.classList.add('spinning');
+
+            await loadHostData(currentModalHost);
+            // If on services tab, refresh that too
+            if (document.getElementById('host-tab-services').classList.contains('active')) {
+                await loadHostServices();
+            }
+
+            btn.classList.remove('spinning');
+        }
+
+        function closeHostModal() {
+            document.getElementById('host-modal').classList.remove('active');
+            stopHostModalAutoRefresh();
+            currentModalHost = null;
+            hostModalAutoRefresh = false;
+            // Reset to metrics tab
+            switchHostModalTab('metrics');
+        }
+
         document.getElementById('service-modal').addEventListener('click', function(e) {
             if (e.target === this) closeModal();
         });
@@ -3122,11 +3506,16 @@
             if (e.target === this) closeErrorModal();
         });
 
+        document.getElementById('host-modal').addEventListener('click', function(e) {
+            if (e.target === this) closeHostModal();
+        });
+
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Escape') {
                 closeModal();
                 closeDatabaseModal();
                 closeErrorModal();
+                closeHostModal();
             }
         });
     </script>

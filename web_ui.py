@@ -1123,6 +1123,136 @@ def database_details(db_system):
     return jsonify(data)
 
 
+@app.route('/api/database/<db_system>/dependencies', methods=['GET'])
+def database_dependencies(db_system):
+    """Get services that depend on this database."""
+    executor = get_query_executor()
+    time_param = request.args.get('time', '15m')
+
+    # Parse time parameter
+    time_value = int(time_param[:-1])
+    time_unit = time_param[-1]
+    if time_unit == 's':
+        interval = f"'{time_value}' SECOND"
+    elif time_unit == 'm':
+        interval = f"'{time_value}' MINUTE"
+    elif time_unit == 'h':
+        interval = f"'{time_value}' HOUR"
+    else:
+        interval = "'15' MINUTE"
+
+    # Find services that call this database
+    dependents_query = f"""
+    SELECT DISTINCT
+        service_name as dependent,
+        'service' as dep_type,
+        COUNT(*) as call_count,
+        ROUND(AVG(duration_ns / 1000000.0), 2) as avg_latency_ms,
+        ROUND(100.0 * SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) / COUNT(*), 2) as error_pct
+    FROM traces_otel_analytic
+    WHERE db_system = '{db_system}'
+      AND start_time > NOW() - INTERVAL {interval}
+    GROUP BY service_name
+    ORDER BY call_count DESC
+    LIMIT 20
+    """
+
+    data = {'dependents': []}
+
+    result = executor.execute_query(dependents_query)
+    if result['success']:
+        data['dependents'] = result['rows']
+
+    return jsonify(data)
+
+
+@app.route('/api/host/<host_name>/services', methods=['GET'])
+def host_services(host_name):
+    """Get services/metrics running on this host."""
+    executor = get_query_executor()
+    time_param = request.args.get('time', '15m')
+
+    # Parse time parameter
+    time_value = int(time_param[:-1])
+    time_unit = time_param[-1]
+    if time_unit == 's':
+        interval = f"'{time_value}' SECOND"
+    elif time_unit == 'm':
+        interval = f"'{time_value}' MINUTE"
+    elif time_unit == 'h':
+        interval = f"'{time_value}' HOUR"
+    else:
+        interval = "'15' MINUTE"
+
+    data = {'services': [], 'current_metrics': None, 'host_info': None}
+
+    # Find services running on this host from traces
+    services_query = f"""
+    SELECT
+        service_name,
+        COUNT(*) as span_count,
+        ROUND(100.0 * SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) / COUNT(*), 1) as error_pct
+    FROM spans_otel_analytic
+    WHERE attributes_flat LIKE '%host.name={host_name}%'
+      AND timestamp > NOW() - INTERVAL {interval}
+      AND service_name IS NOT NULL AND service_name != '' AND service_name != 'unknown'
+    GROUP BY service_name
+    ORDER BY span_count DESC
+    """
+
+    result = executor.execute_query(services_query)
+    if result['success']:
+        data['services'] = result['rows']
+
+    # Get current host metrics
+    host_metrics_query = f"""
+    SELECT
+        MAX(CASE WHEN metric_name = 'system.cpu.utilization' AND value_double <= 1 THEN ROUND(value_double * 100, 1) END) as cpu_pct,
+        MAX(CASE WHEN metric_name = 'system.memory.utilization' AND attributes_flat LIKE '%state=used%' AND value_double <= 1 THEN ROUND(value_double * 100, 1) END) as memory_pct,
+        MAX(CASE WHEN metric_name = 'system.filesystem.utilization' AND value_double <= 1 THEN ROUND(value_double * 100, 1) END) as disk_pct,
+        MAX(timestamp) as last_seen
+    FROM metrics_otel_analytic
+    WHERE attributes_flat LIKE '%host.name={host_name}%'
+      AND metric_name IN ('system.cpu.utilization', 'system.memory.utilization', 'system.filesystem.utilization')
+      AND timestamp > NOW() - INTERVAL '5' MINUTE
+    """
+
+    result = executor.execute_query(host_metrics_query)
+    if result['success'] and result['rows']:
+        row = result['rows'][0]
+        data['current_metrics'] = {
+            'cpu_pct': row.get('cpu_pct'),
+            'memory_pct': row.get('memory_pct'),
+            'disk_pct': row.get('disk_pct')
+        }
+        data['host_info'] = {
+            'last_seen': row.get('last_seen')
+        }
+
+    # Get OS type from metrics attributes
+    os_query = f"""
+    SELECT DISTINCT
+        CASE
+            WHEN attributes_flat LIKE '%os.type=linux%' THEN 'linux'
+            WHEN attributes_flat LIKE '%os.type=windows%' THEN 'windows'
+            WHEN attributes_flat LIKE '%os.type=darwin%' THEN 'darwin'
+            ELSE 'unknown'
+        END as os_type
+    FROM metrics_otel_analytic
+    WHERE attributes_flat LIKE '%host.name={host_name}%'
+      AND timestamp > NOW() - INTERVAL '5' MINUTE
+    LIMIT 1
+    """
+
+    result = executor.execute_query(os_query)
+    if result['success'] and result['rows']:
+        if data['host_info'] is None:
+            data['host_info'] = {}
+        data['host_info']['os_type'] = result['rows'][0].get('os_type', 'unknown')
+
+    return jsonify(data)
+
+
 # =============================================================================
 # Main
 # =============================================================================
