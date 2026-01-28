@@ -459,6 +459,7 @@ def system_status():
     status = {
         'services': [],
         'databases': [],
+        'hosts': [],
         'recent_errors': [],
         'error_summary': {},
         'timestamp': datetime.utcnow().isoformat()
@@ -557,6 +558,23 @@ def system_status():
     result = executor.execute_query(error_query)
     if result['success']:
         status['recent_errors'] = result['rows']
+
+    # Get host metrics (CPU, memory, etc.)
+    host_query = """
+    SELECT
+        COALESCE(NULLIF(REGEXP_EXTRACT(attributes_flat, 'host.name=([^,]+)'), ''), 'unknown') as host_name,
+        MAX(CASE WHEN metric_name = 'system.cpu.utilization' THEN ROUND(value_double * 100, 1) END) as cpu_pct,
+        MAX(CASE WHEN metric_name = 'system.memory.utilization' THEN ROUND(value_double * 100, 1) END) as memory_pct,
+        MAX(CASE WHEN metric_name = 'system.filesystem.utilization' THEN ROUND(value_double * 100, 1) END) as disk_pct,
+        MAX(timestamp) as last_seen
+    FROM metrics_otel_analytic
+    WHERE metric_name IN ('system.cpu.utilization', 'system.memory.utilization', 'system.filesystem.utilization')
+      AND timestamp > NOW() - INTERVAL '2' MINUTE
+    GROUP BY COALESCE(NULLIF(REGEXP_EXTRACT(attributes_flat, 'host.name=([^,]+)'), ''), 'unknown')
+    """
+    result = executor.execute_query(host_query)
+    if result['success']:
+        status['hosts'] = result['rows']
 
     return jsonify(status)
 
