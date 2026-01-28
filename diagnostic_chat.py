@@ -215,11 +215,49 @@ ORDER BY occurrences DESC
 LIMIT 20
 ```
 
+```sql
+-- 4. Check for services that STOPPED emitting metrics (critical health signal!)
+SELECT service_name,
+       SUM(CASE WHEN timestamp > NOW() - INTERVAL '2' MINUTE THEN 1 ELSE 0 END) as last_2min,
+       SUM(CASE WHEN timestamp BETWEEN NOW() - INTERVAL '10' MINUTE AND NOW() - INTERVAL '5' MINUTE THEN 1 ELSE 0 END) as earlier_5min,
+       MAX(timestamp) as last_metric_time
+FROM metrics_otel_analytic
+WHERE timestamp > NOW() - INTERVAL '10' MINUTE
+GROUP BY service_name
+ORDER BY last_2min ASC, earlier_5min DESC
+```
+
+```sql
+-- 5. Check host health - are hosts still reporting system metrics?
+SELECT
+    CASE
+        WHEN attributes_flat LIKE '%host.name=%' THEN
+            SUBSTR(attributes_flat,
+                   POSITION('host.name=' IN attributes_flat) + 10,
+                   CASE
+                       WHEN POSITION(',' IN SUBSTR(attributes_flat, POSITION('host.name=' IN attributes_flat) + 10)) > 0
+                       THEN POSITION(',' IN SUBSTR(attributes_flat, POSITION('host.name=' IN attributes_flat) + 10)) - 1
+                       ELSE 50
+                   END)
+        ELSE 'unknown'
+    END as host_name,
+    COUNT(*) as metric_count,
+    MAX(timestamp) as last_seen
+FROM metrics_otel_analytic
+WHERE metric_name IN ('system.cpu.utilization', 'system.memory.utilization')
+  AND timestamp > NOW() - INTERVAL '5' MINUTE
+GROUP BY 1
+ORDER BY last_seen ASC
+```
+
 **INTERPRET THE RESULTS:**
 - If a database has 0 spans in last 5 min → DATABASE IS DOWN
 - If you see "connection refused" errors → Target service/database is DOWN
 - If errors mention "postgres" or "FATAL" → PostgreSQL connection issue
 - Missing db_system that should exist → Check if that database is running
+- Service with last_2min=0 but earlier_5min>0 → SERVICE JUST WENT DOWN
+- Service with very low last_2min compared to earlier_5min → SERVICE IS DEGRADED
+- Host with old last_seen or low metric_count → HOST MAY BE DOWN OR UNHEALTHY
 
 ### Root Cause Analysis Methodology
 

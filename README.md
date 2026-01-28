@@ -88,3 +88,55 @@ Then open http://localhost:5000 in your browser.
 - Database status monitoring
 - Recent errors feed
 - Query result visualization
+
+## Testing with Simulated Failures
+
+To test the diagnostic capabilities, you can simulate infrastructure failures in the OpenTelemetry demo.
+
+### Simulate PostgreSQL Failure
+
+The PostgreSQL database is used by the Accounting service. To simulate a database outage:
+
+```bash
+# Enter the PostgreSQL container
+docker compose exec -it postgresql /bin/bash
+
+# Block new connections AND terminate existing ones
+psql -U root -d ${POSTGRES_DB} -c "REVOKE CONNECT ON DATABASE ${POSTGRES_DB} FROM PUBLIC;"
+psql -U root -d ${POSTGRES_DB} -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${POSTGRES_DB}' AND pid <> pg_backend_pid();"
+```
+
+This will cause:
+- Services depending on PostgreSQL to fail with connection errors
+- Cascading failures in dependent services
+- The diagnostic tool should identify PostgreSQL as the root cause
+
+**To restore:**
+```bash
+psql -U root -d ${POSTGRES_DB} -c "GRANT CONNECT ON DATABASE ${POSTGRES_DB} TO PUBLIC;"
+```
+
+### Simulate Complete Service Outage
+
+To completely stop a service (e.g., PostgreSQL):
+
+```bash
+# From the host machine (outside containers)
+docker compose stop postgresql
+
+# To restore
+docker compose start postgresql
+```
+
+### What to Look For
+
+When testing, ask the diagnostic chat:
+- "Show me errors in the last 5 minutes"
+- "What's wrong with the system?"
+- "Diagnose the frontend issues"
+
+The AI should:
+1. Check infrastructure health first (database spans, metrics)
+2. Identify missing telemetry from the affected service
+3. Trace cascading errors back to the root cause
+4. Recommend checking the specific failed component
