@@ -4,8 +4,32 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Observability Diagnostic Chat</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
+        :root {
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #12121a;
+            --bg-tertiary: #1a1a24;
+            --bg-card: rgba(26, 26, 36, 0.8);
+            --border-color: rgba(255, 255, 255, 0.06);
+            --border-glow: rgba(0, 217, 255, 0.2);
+            --text-primary: #f0f0f5;
+            --text-secondary: #a0a0b0;
+            --text-muted: #606070;
+            --accent-primary: #00d9ff;
+            --accent-secondary: #7c3aed;
+            --accent-success: #10b981;
+            --accent-warning: #f59e0b;
+            --accent-error: #ef4444;
+            --gradient-primary: linear-gradient(135deg, #00d9ff 0%, #7c3aed 100%);
+            --gradient-bg: linear-gradient(180deg, #0a0a0f 0%, #12121a 100%);
+            --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+            --shadow-md: 0 4px 20px rgba(0, 0, 0, 0.4);
+            --shadow-lg: 0 8px 40px rgba(0, 0, 0, 0.5);
+            --shadow-glow: 0 0 30px rgba(0, 217, 255, 0.15);
+        }
+
         * {
             margin: 0;
             padding: 0;
@@ -13,93 +37,196 @@
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-            background: #1a1a2e;
-            color: #eee;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--gradient-bg);
+            color: var(--text-primary);
             height: 100vh;
             display: flex;
+            overflow: hidden;
         }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
 
         /* Sidebar */
         .sidebar {
-            width: 300px;
-            background: #16213e;
-            padding: 20px;
+            width: 320px;
+            background: var(--bg-secondary);
+            padding: 24px;
             overflow-y: auto;
-            border-right: 1px solid #0f3460;
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
         }
 
-        .sidebar h2 {
-            color: #00d9ff;
-            margin-bottom: 20px;
-            font-size: 14px;
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 32px;
+        }
+
+        .logo-icon {
+            width: 40px;
+            height: 40px;
+            background: var(--gradient-primary);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            box-shadow: var(--shadow-glow);
+        }
+
+        .logo-text {
+            font-size: 18px;
+            font-weight: 700;
+            background: var(--gradient-primary);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .sidebar-section {
+            margin-bottom: 28px;
+        }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .section-title {
+            font-size: 11px;
+            font-weight: 600;
             text-transform: uppercase;
-            letter-spacing: 1px;
+            letter-spacing: 1.2px;
+            color: var(--text-muted);
         }
 
-        .status-section {
-            margin-bottom: 30px;
+        .refresh-btn {
+            background: none;
+            border: none;
+            color: var(--accent-primary);
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 500;
+            padding: 4px 8px;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+
+        .refresh-btn:hover {
+            background: rgba(0, 217, 255, 0.1);
         }
 
         .status-card {
-            background: #1a1a2e;
-            border-radius: 8px;
-            padding: 12px;
-            margin-bottom: 10px;
+            background: var(--bg-card);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 16px;
+            margin-bottom: 12px;
+            transition: all 0.3s ease;
         }
 
-        .status-card h4 {
+        .status-card:hover {
+            border-color: var(--border-glow);
+            box-shadow: var(--shadow-glow);
+        }
+
+        .status-card-title {
             font-size: 12px;
-            color: #888;
-            margin-bottom: 8px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            margin-bottom: 12px;
         }
 
         .service-item {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 8px;
-            border-bottom: 1px solid #2a2a4e;
+            padding: 10px 12px;
+            margin: -2px -8px;
+            border-radius: 10px;
             font-size: 13px;
             cursor: pointer;
-            border-radius: 4px;
-            transition: background 0.2s;
+            transition: all 0.2s ease;
         }
 
         .service-item:hover {
-            background: #0f3460;
-        }
-
-        .service-item:last-child {
-            border-bottom: none;
+            background: rgba(255, 255, 255, 0.05);
+            transform: translateX(4px);
         }
 
         .service-name {
-            color: #ccc;
+            color: var(--text-primary);
+            font-weight: 500;
         }
 
         .status-badge {
-            padding: 2px 8px;
-            border-radius: 12px;
-            font-size: 11px;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 10px;
             font-weight: 600;
+            letter-spacing: 0.3px;
         }
 
-        .status-healthy { background: #00c853; color: #000; }
-        .status-warning { background: #ffc107; color: #000; }
-        .status-error { background: #ff5252; color: #fff; }
+        .status-healthy {
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--accent-success);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+        .status-warning {
+            background: rgba(245, 158, 11, 0.15);
+            color: var(--accent-warning);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+        }
+        .status-error {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--accent-error);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
 
         .error-item {
-            padding: 8px;
-            background: rgba(255, 82, 82, 0.1);
-            border-left: 3px solid #ff5252;
+            padding: 12px;
+            background: rgba(239, 68, 68, 0.08);
+            border-left: 3px solid var(--accent-error);
             margin-bottom: 8px;
-            border-radius: 0 4px 4px 0;
-            font-size: 12px;
+            border-radius: 0 10px 10px 0;
+            transition: all 0.2s;
         }
 
-        .error-service { color: #ff5252; font-weight: 600; }
-        .error-span { color: #888; font-size: 11px; }
+        .error-item:hover {
+            background: rgba(239, 68, 68, 0.12);
+        }
+
+        .error-service {
+            color: var(--accent-error);
+            font-weight: 600;
+            font-size: 12px;
+        }
+        .error-span {
+            color: var(--text-muted);
+            font-size: 11px;
+            margin-top: 2px;
+        }
+
+        .last-updated {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: auto;
+            padding-top: 16px;
+            border-top: 1px solid var(--border-color);
+        }
 
         /* Main Content */
         .main-content {
@@ -107,248 +234,386 @@
             display: flex;
             flex-direction: column;
             min-width: 0;
+            background: var(--bg-primary);
         }
 
         /* Header */
         .header {
-            background: #16213e;
-            padding: 15px 25px;
-            border-bottom: 1px solid #0f3460;
+            background: var(--bg-secondary);
+            padding: 16px 28px;
+            border-bottom: 1px solid var(--border-color);
             display: flex;
             justify-content: space-between;
             align-items: center;
         }
 
-        .header h1 { font-size: 20px; color: #00d9ff; }
-
-        .header-actions button {
-            background: #0f3460;
-            border: none;
-            color: #00d9ff;
-            padding: 8px 16px;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 13px;
-            margin-left: 10px;
+        .header h1 {
+            font-size: 20px;
+            font-weight: 600;
+            background: var(--gradient-primary);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
         }
 
-        .header-actions button:hover { background: #1a4a7a; }
+        .header-actions button {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            padding: 10px 20px;
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .header-actions button:hover {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: var(--accent-primary);
+            color: var(--accent-primary);
+        }
 
         /* Chat Container */
         .chat-container {
             flex: 1;
             overflow-y: auto;
-            padding: 20px;
+            padding: 28px;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
         }
 
         .message {
-            max-width: 85%;
-            margin-bottom: 20px;
-            animation: fadeIn 0.3s ease;
+            max-width: 80%;
+            animation: slideIn 0.4s ease;
         }
 
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
         }
 
-        .message.user { margin-left: auto; }
-
-        .message-content {
-            padding: 15px 20px;
-            border-radius: 12px;
-            line-height: 1.5;
+        .message.user {
+            margin-left: auto;
+            align-self: flex-end;
         }
-
-        .message.user .message-content { background: #0f3460; color: #fff; }
-        .message.assistant .message-content { background: #2a2a4e; color: #eee; }
 
         .message-label {
             font-size: 11px;
-            color: #666;
-            margin-bottom: 5px;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-bottom: 8px;
             text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
 
         .message.user .message-label { text-align: right; }
 
+        .message-content {
+            padding: 18px 22px;
+            border-radius: 18px;
+            line-height: 1.6;
+            font-size: 14px;
+        }
+
+        .message.user .message-content {
+            background: var(--gradient-primary);
+            color: #fff;
+            border-bottom-right-radius: 6px;
+        }
+
+        .message.assistant .message-content {
+            background: var(--bg-card);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            border-bottom-left-radius: 6px;
+        }
+
         /* Charts */
         .chart-container {
-            background: #1a1a2e;
-            border-radius: 8px;
-            padding: 15px;
-            margin: 15px 0;
-            max-width: 600px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 20px;
+            margin: 16px 0;
+            max-width: 650px;
         }
 
         .chart-container canvas {
-            max-height: 300px;
+            max-height: 280px;
         }
 
         /* Query Results */
         .query-block {
-            background: #1a1a2e;
-            border: 1px solid #0f3460;
-            border-radius: 8px;
-            margin: 10px 0;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            margin: 12px 0;
             overflow: hidden;
         }
 
         .query-header {
-            background: #0f3460;
-            padding: 8px 12px;
+            background: var(--bg-tertiary);
+            padding: 12px 16px;
             font-size: 12px;
-            color: #00d9ff;
+            font-weight: 500;
+            color: var(--accent-primary);
             display: flex;
             justify-content: space-between;
             cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .query-header:hover {
+            background: rgba(255, 255, 255, 0.03);
         }
 
         .query-sql {
-            padding: 12px;
-            background: #0d1b2a;
-            font-family: 'Monaco', 'Menlo', monospace;
+            padding: 16px;
+            background: var(--bg-primary);
+            font-family: 'JetBrains Mono', monospace;
             font-size: 12px;
-            color: #aaa;
+            color: var(--text-secondary);
             white-space: pre-wrap;
             overflow-x: auto;
+            border-top: 1px solid var(--border-color);
+            border-bottom: 1px solid var(--border-color);
         }
 
-        .query-results { padding: 12px; font-size: 12px; }
+        .query-results { padding: 16px; }
 
-        .query-results table { width: 100%; border-collapse: collapse; }
+        .query-results table {
+            width: 100%;
+            border-collapse: collapse;
+        }
 
         .query-results th {
-            background: #0f3460;
-            padding: 8px;
+            background: var(--bg-tertiary);
+            padding: 10px 12px;
             text-align: left;
             font-size: 11px;
-            color: #00d9ff;
+            font-weight: 600;
+            color: var(--accent-primary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
 
         .query-results td {
-            padding: 8px;
-            border-bottom: 1px solid #2a2a4e;
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border-color);
             font-size: 12px;
+            font-family: 'JetBrains Mono', monospace;
             max-width: 200px;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
         }
 
-        /* Input Area */
-        .input-area {
-            padding: 20px;
-            background: #16213e;
-            border-top: 1px solid #0f3460;
+        .query-results tr:hover td {
+            background: rgba(255, 255, 255, 0.02);
         }
 
-        .input-container { display: flex; gap: 10px; }
+        /* Input Area */
+        .input-area {
+            padding: 20px 28px 28px;
+            background: var(--bg-secondary);
+            border-top: 1px solid var(--border-color);
+        }
+
+        .input-container {
+            display: flex;
+            gap: 12px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 8px;
+            transition: all 0.3s;
+        }
+
+        .input-container:focus-within {
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 0 3px rgba(0, 217, 255, 0.1);
+        }
 
         .input-container textarea {
             flex: 1;
-            background: #1a1a2e;
-            border: 1px solid #0f3460;
-            border-radius: 8px;
-            padding: 15px;
-            color: #eee;
+            background: transparent;
+            border: none;
+            padding: 12px 16px;
+            color: var(--text-primary);
             font-size: 14px;
             resize: none;
-            height: 60px;
+            height: 48px;
             font-family: inherit;
+            line-height: 1.5;
         }
 
-        .input-container textarea:focus { outline: none; border-color: #00d9ff; }
+        .input-container textarea::placeholder {
+            color: var(--text-muted);
+        }
+
+        .input-container textarea:focus { outline: none; }
 
         .input-container button {
-            background: #00d9ff;
+            background: var(--gradient-primary);
             border: none;
-            color: #000;
-            padding: 0 30px;
-            border-radius: 8px;
+            color: #fff;
+            padding: 0 28px;
+            border-radius: 12px;
             cursor: pointer;
             font-size: 14px;
             font-weight: 600;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
         }
 
-        .input-container button:hover { background: #00b8d9; }
-        .input-container button:disabled { background: #444; cursor: not-allowed; }
+        .input-container button:hover {
+            transform: scale(1.02);
+            box-shadow: var(--shadow-glow);
+        }
+
+        .input-container button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
 
         /* Loading */
-        .loading { display: flex; align-items: center; gap: 10px; color: #888; }
-        .loading-dots { display: flex; gap: 4px; }
-        .loading-dots span {
-            width: 8px; height: 8px;
-            background: #00d9ff;
-            border-radius: 50%;
-            animation: bounce 1.4s infinite ease-in-out both;
+        .loading {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: var(--text-secondary);
         }
+
+        .loading-dots {
+            display: flex;
+            gap: 6px;
+        }
+
+        .loading-dots span {
+            width: 8px;
+            height: 8px;
+            background: var(--accent-primary);
+            border-radius: 50%;
+            animation: pulse 1.4s infinite ease-in-out both;
+        }
+
         .loading-dots span:nth-child(1) { animation-delay: -0.32s; }
         .loading-dots span:nth-child(2) { animation-delay: -0.16s; }
 
-        @keyframes bounce {
-            0%, 80%, 100% { transform: scale(0); }
-            40% { transform: scale(1); }
+        @keyframes pulse {
+            0%, 80%, 100% { transform: scale(0.6); opacity: 0.5; }
+            40% { transform: scale(1); opacity: 1; }
         }
 
-        /* Markdown-like styling */
-        .message-content h1, .message-content h2, .message-content h3 { color: #00d9ff; margin: 15px 0 10px 0; }
+        /* Markdown styling */
+        .message-content h1, .message-content h2, .message-content h3 {
+            color: var(--accent-primary);
+            margin: 18px 0 10px 0;
+        }
         .message-content h2 { font-size: 16px; }
         .message-content h3 { font-size: 14px; }
-        .message-content ul, .message-content ol { margin: 10px 0; padding-left: 20px; }
-        .message-content li { margin: 5px 0; }
-        .message-content code { background: #1a1a2e; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 13px; }
-        .message-content pre { background: #1a1a2e; padding: 12px; border-radius: 6px; overflow-x: auto; margin: 10px 0; }
-        .message-content pre code { background: none; padding: 0; }
-        .message-content strong { color: #00d9ff; }
+        .message-content ul, .message-content ol { margin: 12px 0; padding-left: 24px; }
+        .message-content li { margin: 6px 0; }
+        .message-content code {
+            background: var(--bg-primary);
+            padding: 3px 8px;
+            border-radius: 6px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            color: var(--accent-primary);
+        }
+        .message-content pre {
+            background: var(--bg-primary);
+            padding: 16px;
+            border-radius: 12px;
+            overflow-x: auto;
+            margin: 12px 0;
+            border: 1px solid var(--border-color);
+        }
+        .message-content pre code { background: none; padding: 0; color: var(--text-secondary); }
+        .message-content strong { color: var(--accent-primary); font-weight: 600; }
 
-        /* Service Drill-down Modal */
+        /* Modal */
         .modal-overlay {
             display: none;
             position: fixed;
             top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0,0,0,0.7);
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(4px);
             z-index: 1000;
             justify-content: center;
             align-items: center;
+            padding: 20px;
         }
 
         .modal-overlay.active { display: flex; }
 
         .modal {
-            background: #16213e;
-            border-radius: 12px;
-            width: 90%;
-            max-width: 900px;
+            background: var(--bg-secondary);
+            border-radius: 20px;
+            width: 100%;
+            max-width: 950px;
             max-height: 90vh;
             overflow-y: auto;
-            border: 1px solid #0f3460;
+            border: 1px solid var(--border-color);
+            box-shadow: var(--shadow-lg);
+            animation: modalIn 0.3s ease;
+        }
+
+        @keyframes modalIn {
+            from { opacity: 0; transform: scale(0.95) translateY(20px); }
+            to { opacity: 1; transform: scale(1) translateY(0); }
         }
 
         .modal-header {
-            padding: 20px;
-            border-bottom: 1px solid #0f3460;
+            padding: 24px;
+            border-bottom: 1px solid var(--border-color);
             display: flex;
             justify-content: space-between;
             align-items: center;
             position: sticky;
             top: 0;
-            background: #16213e;
+            background: var(--bg-secondary);
+            z-index: 10;
         }
 
-        .modal-header h2 { color: #00d9ff; }
+        .modal-header h2 {
+            font-size: 20px;
+            font-weight: 600;
+            background: var(--gradient-primary);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
 
         .modal-close {
-            background: none;
-            border: none;
-            color: #888;
-            font-size: 24px;
+            width: 36px;
+            height: 36px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            color: var(--text-secondary);
+            font-size: 18px;
             cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
         }
 
-        .modal-close:hover { color: #fff; }
+        .modal-close:hover {
+            background: rgba(239, 68, 68, 0.1);
+            border-color: var(--accent-error);
+            color: var(--accent-error);
+        }
 
-        .modal-body { padding: 20px; }
+        .modal-body { padding: 24px; }
 
         .chart-row {
             display: grid;
@@ -358,22 +623,54 @@
         }
 
         .chart-card {
-            background: #1a1a2e;
-            border-radius: 8px;
-            padding: 15px;
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 20px;
+            transition: all 0.3s;
+        }
+
+        .chart-card:hover {
+            border-color: var(--border-glow);
         }
 
         .chart-card h4 {
-            color: #00d9ff;
-            font-size: 12px;
-            margin-bottom: 10px;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-bottom: 16px;
             text-transform: uppercase;
+            letter-spacing: 1px;
         }
 
-        .ops-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-        .ops-table th, .ops-table td { padding: 8px; text-align: left; font-size: 12px; }
-        .ops-table th { color: #00d9ff; border-bottom: 1px solid #0f3460; }
-        .ops-table td { border-bottom: 1px solid #2a2a4e; }
+        .ops-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .ops-table th, .ops-table td {
+            padding: 12px;
+            text-align: left;
+            font-size: 12px;
+        }
+
+        .ops-table th {
+            color: var(--accent-primary);
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 10px;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .ops-table td {
+            border-bottom: 1px solid var(--border-color);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .ops-table tr:hover td {
+            background: rgba(255, 255, 255, 0.02);
+        }
 
         /* Responsive */
         @media (max-width: 1200px) {
@@ -384,37 +681,163 @@
             .sidebar { display: none; }
         }
 
-        .refresh-btn {
-            background: none;
-            border: none;
-            color: #00d9ff;
-            cursor: pointer;
+        /* Empty state */
+        .empty-state {
+            color: var(--text-muted);
             font-size: 12px;
+            text-align: center;
+            padding: 16px;
         }
 
-        .refresh-btn:hover { text-decoration: underline; }
-        .last-updated { font-size: 10px; color: #666; margin-top: 10px; }
+        /* Auto-refresh controls */
+        .refresh-controls {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .toggle-container {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .toggle-label {
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        .toggle-switch {
+            position: relative;
+            width: 36px;
+            height: 20px;
+            background: var(--bg-tertiary);
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s;
+            border: 1px solid var(--border-color);
+        }
+
+        .toggle-switch.active {
+            background: var(--accent-primary);
+            border-color: var(--accent-primary);
+        }
+
+        .toggle-switch::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 14px;
+            height: 14px;
+            background: var(--text-secondary);
+            border-radius: 50%;
+            transition: all 0.3s;
+        }
+
+        .toggle-switch.active::after {
+            transform: translateX(16px);
+            background: white;
+        }
+
+        .modal-refresh-controls {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .modal-refresh-btn {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 500;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .modal-refresh-btn:hover {
+            border-color: var(--accent-primary);
+            color: var(--accent-primary);
+        }
+
+        .modal-refresh-btn.spinning svg {
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .auto-refresh-indicator {
+            font-size: 10px;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .auto-refresh-indicator.active {
+            color: var(--accent-success);
+        }
+
+        .auto-refresh-indicator .dot {
+            width: 6px;
+            height: 6px;
+            background: var(--text-muted);
+            border-radius: 50%;
+        }
+
+        .auto-refresh-indicator.active .dot {
+            background: var(--accent-success);
+            animation: pulse-dot 2s infinite;
+        }
+
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
     </style>
 </head>
 <body>
     <aside class="sidebar">
-        <div class="status-section">
-            <h2>System Status <button class="refresh-btn" onclick="refreshStatus()">Refresh</button></h2>
-            <div id="services-status">
-                <div class="status-card">
-                    <h4>Services (click to drill down)</h4>
-                    <div id="services-list">Loading...</div>
+        <div class="logo">
+            <div class="logo-icon">O</div>
+            <span class="logo-text">Observability</span>
+        </div>
+
+        <div class="sidebar-section">
+            <div class="section-header">
+                <span class="section-title">System Status</span>
+                <div class="refresh-controls">
+                    <div class="toggle-container">
+                        <span class="toggle-label">Auto</span>
+                        <div class="toggle-switch active" id="sidebar-auto-toggle" onclick="toggleSidebarAutoRefresh()"></div>
+                    </div>
+                    <button class="refresh-btn" onclick="refreshStatus()">Refresh</button>
                 </div>
             </div>
             <div class="status-card">
-                <h4>Databases</h4>
-                <div id="databases-list">Loading...</div>
+                <div class="status-card-title">Services (click to drill down)</div>
+                <div id="services-list"><div class="empty-state">Loading...</div></div>
+            </div>
+            <div class="status-card">
+                <div class="status-card-title">Databases</div>
+                <div id="databases-list"><div class="empty-state">Loading...</div></div>
             </div>
         </div>
 
-        <div class="status-section">
-            <h2>Recent Errors</h2>
-            <div id="errors-list">Loading...</div>
+        <div class="sidebar-section">
+            <div class="section-header">
+                <span class="section-title">Recent Errors</span>
+            </div>
+            <div id="errors-list"><div class="empty-state">Loading...</div></div>
         </div>
 
         <div class="last-updated">Last updated: <span id="last-updated">-</span></div>
@@ -422,7 +845,7 @@
 
     <main class="main-content">
         <header class="header">
-            <h1>Observability Diagnostic Chat</h1>
+            <h1>Diagnostic Chat</h1>
             <div class="header-actions">
                 <button onclick="clearChat()">Clear Chat</button>
             </div>
@@ -448,7 +871,12 @@
         <div class="input-area">
             <div class="input-container">
                 <textarea id="message-input" placeholder="Describe the issue or ask for a visualization..." onkeydown="handleKeyDown(event)"></textarea>
-                <button id="send-btn" onclick="sendMessage()">Send</button>
+                <button id="send-btn" onclick="sendMessage()">
+                    <span>Send</span>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+                    </svg>
+                </button>
             </div>
         </div>
     </main>
@@ -458,7 +886,23 @@
         <div class="modal">
             <div class="modal-header">
                 <h2 id="modal-service-name">Service Details</h2>
-                <button class="modal-close" onclick="closeModal()">&times;</button>
+                <div class="modal-refresh-controls">
+                    <div class="auto-refresh-indicator" id="modal-auto-indicator">
+                        <span class="dot"></span>
+                        <span>Auto-refresh off</span>
+                    </div>
+                    <div class="toggle-container">
+                        <span class="toggle-label">Auto</span>
+                        <div class="toggle-switch" id="modal-auto-toggle" onclick="toggleModalAutoRefresh()"></div>
+                    </div>
+                    <button class="modal-refresh-btn" id="modal-refresh-btn" onclick="refreshServiceModal()">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+                        </svg>
+                        Refresh
+                    </button>
+                    <button class="modal-close" onclick="closeModal()">&times;</button>
+                </div>
             </div>
             <div class="modal-body" id="modal-body">
                 <div class="chart-row">
@@ -494,12 +938,86 @@
         let modalCharts = {};
         let chatCharts = [];
 
-        const chartColors = ['#00d9ff', '#ff5252', '#00c853', '#ffc107', '#9c27b0', '#ff9800'];
+        // Auto-refresh state
+        let sidebarAutoRefresh = true;
+        let sidebarRefreshInterval = null;
+        let modalAutoRefresh = false;
+        let modalRefreshInterval = null;
+        let currentModalService = null;
+        const REFRESH_INTERVAL = 30000; // 30 seconds
+
+        const chartColors = ['#00d9ff', '#7c3aed', '#10b981', '#f59e0b', '#ef4444', '#ec4899'];
+
+        Chart.defaults.color = '#a0a0b0';
+        Chart.defaults.borderColor = 'rgba(255, 255, 255, 0.06)';
 
         document.addEventListener('DOMContentLoaded', () => {
             refreshStatus();
-            setInterval(refreshStatus, 30000);
+            startSidebarAutoRefresh();
         });
+
+        function startSidebarAutoRefresh() {
+            if (sidebarRefreshInterval) clearInterval(sidebarRefreshInterval);
+            if (sidebarAutoRefresh) {
+                sidebarRefreshInterval = setInterval(refreshStatus, REFRESH_INTERVAL);
+            }
+        }
+
+        function toggleSidebarAutoRefresh() {
+            sidebarAutoRefresh = !sidebarAutoRefresh;
+            const toggle = document.getElementById('sidebar-auto-toggle');
+            toggle.classList.toggle('active', sidebarAutoRefresh);
+
+            if (sidebarAutoRefresh) {
+                startSidebarAutoRefresh();
+            } else {
+                if (sidebarRefreshInterval) {
+                    clearInterval(sidebarRefreshInterval);
+                    sidebarRefreshInterval = null;
+                }
+            }
+        }
+
+        function toggleModalAutoRefresh() {
+            modalAutoRefresh = !modalAutoRefresh;
+            const toggle = document.getElementById('modal-auto-toggle');
+            const indicator = document.getElementById('modal-auto-indicator');
+
+            toggle.classList.toggle('active', modalAutoRefresh);
+            indicator.classList.toggle('active', modalAutoRefresh);
+            indicator.querySelector('span:last-child').textContent = modalAutoRefresh ? 'Auto-refresh on' : 'Auto-refresh off';
+
+            if (modalAutoRefresh && currentModalService) {
+                startModalAutoRefresh();
+            } else {
+                stopModalAutoRefresh();
+            }
+        }
+
+        function startModalAutoRefresh() {
+            if (modalRefreshInterval) clearInterval(modalRefreshInterval);
+            if (modalAutoRefresh && currentModalService) {
+                modalRefreshInterval = setInterval(() => refreshServiceModal(), REFRESH_INTERVAL);
+            }
+        }
+
+        function stopModalAutoRefresh() {
+            if (modalRefreshInterval) {
+                clearInterval(modalRefreshInterval);
+                modalRefreshInterval = null;
+            }
+        }
+
+        async function refreshServiceModal() {
+            if (!currentModalService) return;
+
+            const btn = document.getElementById('modal-refresh-btn');
+            btn.classList.add('spinning');
+
+            await loadServiceData(currentModalService);
+
+            btn.classList.remove('spinning');
+        }
 
         function handleKeyDown(event) {
             if (event.key === 'Enter' && !event.shiftKey) {
@@ -556,8 +1074,8 @@
                 queriesHtml = queries.map((q, i) => `
                     <div class="query-block">
                         <div class="query-header" onclick="toggleQuery(this)">
-                            <span>Query ${i + 1}: ${q.result.row_count} rows</span>
-                            <span>▼</span>
+                            <span>Query ${i + 1}: ${q.result.row_count || 0} rows</span>
+                            <span>&#9662;</span>
                         </div>
                         <div class="query-content" style="display: none;">
                             <div class="query-sql">${escapeHtml(q.sql)}</div>
@@ -572,11 +1090,7 @@
                 chartsHtml = charts.map((chart, i) => {
                     const chartId = `chat-chart-${Date.now()}-${i}`;
                     setTimeout(() => renderChart(chartId, chart), 100);
-                    return `
-                        <div class="chart-container">
-                            <canvas id="${chartId}"></canvas>
-                        </div>
-                    `;
+                    return `<div class="chart-container"><canvas id="${chartId}"></canvas></div>`;
                 }).join('');
             }
 
@@ -603,39 +1117,26 @@
                 borderColor: ds.color || chartColors[i % chartColors.length],
                 backgroundColor: chartData.chart_type === 'line'
                     ? 'transparent'
-                    : (ds.color || chartColors[i % chartColors.length]) + '80',
-                tension: 0.3,
-                fill: chartData.chart_type === 'line' ? false : true
+                    : (ds.color || chartColors[i % chartColors.length]) + '40',
+                tension: 0.4,
+                fill: chartData.chart_type === 'line' ? false : true,
+                pointRadius: 3,
+                pointHoverRadius: 6
             }));
 
             new Chart(ctx, {
                 type: chartData.chart_type,
-                data: {
-                    labels: chartData.labels,
-                    datasets: datasets
-                },
+                data: { labels: chartData.labels, datasets: datasets },
                 options: {
                     responsive: true,
                     maintainAspectRatio: true,
                     plugins: {
-                        title: {
-                            display: true,
-                            text: chartData.title,
-                            color: '#00d9ff'
-                        },
-                        legend: {
-                            labels: { color: '#ccc' }
-                        }
+                        title: { display: true, text: chartData.title, color: '#00d9ff', font: { size: 14, weight: 600 } },
+                        legend: { labels: { color: '#a0a0b0', font: { size: 11 } } }
                     },
                     scales: chartData.chart_type !== 'doughnut' ? {
-                        x: {
-                            ticks: { color: '#888' },
-                            grid: { color: '#2a2a4e' }
-                        },
-                        y: {
-                            ticks: { color: '#888' },
-                            grid: { color: '#2a2a4e' }
-                        }
+                        x: { ticks: { color: '#606070' }, grid: { color: 'rgba(255,255,255,0.04)' } },
+                        y: { ticks: { color: '#606070' }, grid: { color: 'rgba(255,255,255,0.04)' } }
                     } : undefined
                 }
             });
@@ -672,8 +1173,8 @@
         }
 
         function formatQueryResults(result) {
-            if (!result.success) return `<div style="color: #ff5252;">Error: ${result.error}</div>`;
-            if (result.rows.length === 0) return '<div style="color: #888;">No results</div>';
+            if (!result.success) return `<div style="color: var(--accent-error);">Error: ${result.error}</div>`;
+            if (!result.rows || result.rows.length === 0) return '<div class="empty-state">No results</div>';
 
             const columns = result.columns;
             const rows = result.rows.slice(0, 20);
@@ -692,23 +1193,36 @@
             });
 
             html += '</tbody></table>';
-            if (result.rows.length > 20) html += `<div style="margin-top: 10px; color: #888;">Showing 20 of ${result.rows.length} rows</div>`;
+            if (result.rows.length > 20) html += `<div class="empty-state">Showing 20 of ${result.rows.length} rows</div>`;
             return html;
         }
 
         function formatMarkdown(text) {
             if (!text) return '';
             text = escapeHtml(text);
+            // Headers
             text = text.replace(/^### (.*$)/gm, '<h3>$1</h3>');
             text = text.replace(/^## (.*$)/gm, '<h2>$1</h2>');
             text = text.replace(/^# (.*$)/gm, '<h1>$1</h1>');
+            // Bold
             text = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+            // Code blocks
             text = text.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
             text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
+            // Numbered lists (1. 2. 3. etc)
+            text = text.replace(/^(\d+)\. (.*$)/gm, '<li>$2</li>');
+            // Bullet lists
             text = text.replace(/^\- (.*$)/gm, '<li>$1</li>');
-            text = text.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
+            text = text.replace(/^\* (.*$)/gm, '<li>$1</li>');
+            // Wrap consecutive li elements in ul/ol
+            text = text.replace(/(<li>[\s\S]*?<\/li>)(\s*)(?=<li>|$)/g, function(match) {
+                return match;
+            });
+            text = text.replace(/((?:<li>.*?<\/li>\s*)+)/g, '<ul>$1</ul>');
+            // Paragraphs
             text = text.replace(/\n\n/g, '</p><p>');
             text = '<p>' + text + '</p>';
+            // Clean up empty tags and nesting issues
             text = text.replace(/<p><\/p>/g, '');
             text = text.replace(/<p>(<h[123]>)/g, '$1');
             text = text.replace(/(<\/h[123]>)<\/p>/g, '$1');
@@ -716,6 +1230,7 @@
             text = text.replace(/(<\/ul>)<\/p>/g, '$1');
             text = text.replace(/<p>(<pre>)/g, '$1');
             text = text.replace(/(<\/pre>)<\/p>/g, '$1');
+            text = text.replace(/<p>\s*<\/p>/g, '');
             return text;
         }
 
@@ -733,7 +1248,6 @@
                 body: JSON.stringify({ session_id: sessionId })
             });
 
-            // Destroy any existing chat charts
             chatCharts.forEach(chart => chart.destroy());
             chatCharts = [];
 
@@ -755,7 +1269,11 @@
 
                 const servicesList = document.getElementById('services-list');
                 if (data.services && data.services.length > 0) {
-                    servicesList.innerHTML = data.services.map(s => {
+                    // Sort services alphabetically by name
+                    const sortedServices = [...data.services].sort((a, b) =>
+                        a.service_name.localeCompare(b.service_name)
+                    );
+                    servicesList.innerHTML = sortedServices.map(s => {
                         const errorPct = parseFloat(s.error_pct) || 0;
                         let statusClass = 'status-healthy';
                         let statusText = 'OK';
@@ -769,7 +1287,7 @@
                         `;
                     }).join('');
                 } else {
-                    servicesList.innerHTML = '<div style="color: #888; font-size: 12px;">No data</div>';
+                    servicesList.innerHTML = '<div class="empty-state">No service data</div>';
                 }
 
                 const dbList = document.getElementById('databases-list');
@@ -777,11 +1295,11 @@
                     dbList.innerHTML = data.databases.map(db => `
                         <div class="service-item" style="cursor: default;">
                             <span class="service-name">${db.db_system}</span>
-                            <span class="status-badge status-healthy">${db.span_count} spans</span>
+                            <span class="status-badge status-healthy">${db.span_count}</span>
                         </div>
                     `).join('');
                 } else {
-                    dbList.innerHTML = '<div style="color: #ff5252; font-size: 12px;">No database spans detected!</div>';
+                    dbList.innerHTML = '<div class="empty-state" style="color: var(--accent-error);">No database spans!</div>';
                 }
 
                 const errorsList = document.getElementById('errors-list');
@@ -793,7 +1311,7 @@
                         </div>
                     `).join('');
                 } else {
-                    errorsList.innerHTML = '<div style="color: #00c853; font-size: 12px;">No recent errors</div>';
+                    errorsList.innerHTML = '<div class="empty-state" style="color: var(--accent-success);">No recent errors</div>';
                 }
 
                 document.getElementById('last-updated').textContent = new Date().toLocaleTimeString();
@@ -804,10 +1322,21 @@
         }
 
         async function openServiceModal(serviceName) {
+            currentModalService = serviceName;
             document.getElementById('modal-service-name').textContent = serviceName;
             document.getElementById('service-modal').classList.add('active');
 
-            // Destroy existing modal charts
+            // Reset auto-refresh toggle state when opening modal
+            modalAutoRefresh = false;
+            document.getElementById('modal-auto-toggle').classList.remove('active');
+            const indicator = document.getElementById('modal-auto-indicator');
+            indicator.classList.remove('active');
+            indicator.querySelector('span:last-child').textContent = 'Auto-refresh off';
+
+            await loadServiceData(serviceName);
+        }
+
+        async function loadServiceData(serviceName) {
             Object.values(modalCharts).forEach(chart => chart.destroy());
             modalCharts = {};
 
@@ -815,7 +1344,6 @@
                 const response = await fetch(`/api/service/${encodeURIComponent(serviceName)}?range=1`);
                 const data = await response.json();
 
-                // Latency chart
                 if (data.latency_history && data.latency_history.length > 0) {
                     const labels = data.latency_history.map(r => {
                         const d = new Date(r.time_bucket);
@@ -826,15 +1354,14 @@
                         data: {
                             labels: labels,
                             datasets: [
-                                { label: 'Avg Latency (ms)', data: data.latency_history.map(r => r.avg_latency_ms), borderColor: '#00d9ff', tension: 0.3, fill: false },
-                                { label: 'Max Latency (ms)', data: data.latency_history.map(r => r.max_latency_ms), borderColor: '#ff5252', tension: 0.3, fill: false }
+                                { label: 'Avg Latency (ms)', data: data.latency_history.map(r => r.avg_latency_ms), borderColor: '#00d9ff', tension: 0.4, fill: false, pointRadius: 2 },
+                                { label: 'Max Latency (ms)', data: data.latency_history.map(r => r.max_latency_ms), borderColor: '#ef4444', tension: 0.4, fill: false, pointRadius: 2 }
                             ]
                         },
                         options: chartOptions()
                     });
                 }
 
-                // Error rate chart
                 if (data.error_history && data.error_history.length > 0) {
                     const labels = data.error_history.map(r => {
                         const d = new Date(r.time_bucket);
@@ -845,14 +1372,13 @@
                         data: {
                             labels: labels,
                             datasets: [
-                                { label: 'Error %', data: data.error_history.map(r => r.error_pct), borderColor: '#ff5252', backgroundColor: 'rgba(255,82,82,0.1)', tension: 0.3, fill: true }
+                                { label: 'Error %', data: data.error_history.map(r => r.error_pct), borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.1)', tension: 0.4, fill: true, pointRadius: 2 }
                             ]
                         },
                         options: chartOptions()
                     });
                 }
 
-                // Throughput chart
                 if (data.latency_history && data.latency_history.length > 0) {
                     const labels = data.latency_history.map(r => {
                         const d = new Date(r.time_bucket);
@@ -863,14 +1389,13 @@
                         data: {
                             labels: labels,
                             datasets: [
-                                { label: 'Requests', data: data.latency_history.map(r => r.request_count), backgroundColor: '#00d9ff80' }
+                                { label: 'Requests', data: data.latency_history.map(r => r.request_count), backgroundColor: 'rgba(0,217,255,0.4)', borderColor: '#00d9ff', borderWidth: 1 }
                             ]
                         },
                         options: chartOptions()
                     });
                 }
 
-                // Top operations table
                 const opsTable = document.getElementById('ops-table').querySelector('tbody');
                 if (data.top_operations && data.top_operations.length > 0) {
                     opsTable.innerHTML = data.top_operations.map(op => `
@@ -878,11 +1403,11 @@
                             <td title="${escapeHtml(op.span_name)}">${escapeHtml(op.span_name.substring(0, 30))}</td>
                             <td>${op.call_count}</td>
                             <td>${op.avg_latency_ms}ms</td>
-                            <td style="color: ${op.error_pct > 5 ? '#ff5252' : '#ccc'}">${op.error_pct}%</td>
+                            <td style="color: ${op.error_pct > 5 ? 'var(--accent-error)' : 'inherit'}">${op.error_pct}%</td>
                         </tr>
                     `).join('');
                 } else {
-                    opsTable.innerHTML = '<tr><td colspan="4" style="color: #888;">No data</td></tr>';
+                    opsTable.innerHTML = '<tr><td colspan="4" class="empty-state">No data</td></tr>';
                 }
 
             } catch (error) {
@@ -894,24 +1419,25 @@
             return {
                 responsive: true,
                 maintainAspectRatio: true,
-                plugins: { legend: { labels: { color: '#ccc' } } },
+                plugins: { legend: { labels: { color: '#a0a0b0', font: { size: 11 } } } },
                 scales: {
-                    x: { ticks: { color: '#888' }, grid: { color: '#2a2a4e' } },
-                    y: { ticks: { color: '#888' }, grid: { color: '#2a2a4e' } }
+                    x: { ticks: { color: '#606070', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.04)' } },
+                    y: { ticks: { color: '#606070', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.04)' } }
                 }
             };
         }
 
         function closeModal() {
             document.getElementById('service-modal').classList.remove('active');
+            stopModalAutoRefresh();
+            currentModalService = null;
+            modalAutoRefresh = false;
         }
 
-        // Close modal on overlay click
         document.getElementById('service-modal').addEventListener('click', function(e) {
             if (e.target === this) closeModal();
         });
 
-        // Close modal on Escape key
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Escape') closeModal();
         });
