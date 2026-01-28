@@ -157,28 +157,9 @@ def index():
     return render_template('index.html')
 
 
-@app.route('/api/chat', methods=['POST'])
-def chat():
-    """Handle chat messages."""
-    data = request.json
-    user_message = data.get('message', '')
-    session_id = data.get('session_id', 'default')
-
-    if not user_message:
-        return jsonify({'error': 'No message provided'}), 400
-
-    conversation_history = get_or_create_session(session_id)
-    conversation_history.append({"role": "user", "content": user_message})
-
-    # Keep history manageable
-    if len(conversation_history) > 20:
-        conversation_history = conversation_history[-20:]
-        chat_sessions[session_id] = conversation_history
-
-    client = get_anthropic_client()
-    executor = get_query_executor()
-
-    tools = [{
+def get_chat_tools():
+    """Return the tools definition for the chat endpoint."""
+    return [{
         "name": "execute_sql",
         "description": "Execute a SQL query against the observability database",
         "input_schema": {
@@ -230,6 +211,151 @@ IMPORTANT: Always provide data sorted by the x-axis (usually time) for line char
             "required": ["chart_type", "title", "labels", "datasets"]
         }
     }]
+
+
+@app.route('/api/chat/stream', methods=['POST'])
+def chat_stream():
+    """Handle chat messages with streaming progress updates via SSE."""
+    data = request.json
+    user_message = data.get('message', '')
+    session_id = data.get('session_id', 'default')
+
+    if not user_message:
+        return jsonify({'error': 'No message provided'}), 400
+
+    def generate():
+        conversation_history = get_or_create_session(session_id)
+        conversation_history.append({"role": "user", "content": user_message})
+
+        # Keep history manageable
+        if len(conversation_history) > 20:
+            conversation_history = conversation_history[-20:]
+            chat_sessions[session_id] = conversation_history
+
+        client = get_anthropic_client()
+        executor = get_query_executor()
+        tools = get_chat_tools()
+
+        executed_queries = []
+        generated_charts = []
+        iteration = 0
+        max_iterations = 10  # Safety limit
+
+        try:
+            # Send initial status
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Analyzing your question...', 'step': 1})}\n\n"
+
+            response = client.messages.create(
+                model=ANTHROPIC_MODEL,
+                max_tokens=4096,
+                system=SYSTEM_PROMPT,
+                tools=tools,
+                messages=conversation_history
+            )
+
+            # Handle tool use loop
+            while response.stop_reason == "tool_use" and iteration < max_iterations:
+                iteration += 1
+                tool_results = []
+
+                # Count tools to execute
+                tool_count = sum(1 for cb in response.content if cb.type == "tool_use")
+                tool_index = 0
+
+                for content_block in response.content:
+                    if content_block.type == "tool_use":
+                        tool_index += 1
+
+                        if content_block.name == "execute_sql":
+                            sql = content_block.input.get("sql", "")
+                            # Send query status
+                            yield f"data: {json.dumps({'type': 'status', 'message': f'Executing query {tool_index}/{tool_count}...', 'step': iteration + 1, 'detail': sql[:80] + '...' if len(sql) > 80 else sql})}\n\n"
+
+                            result = executor.execute_query(sql)
+                            executed_queries.append({"sql": sql, "result": result})
+
+                            row_count = result.get('row_count', 0) if result.get('success') else 0
+                            yield f"data: {json.dumps({'type': 'query_result', 'query_index': len(executed_queries) - 1, 'row_count': row_count, 'success': result.get('success', False)})}\n\n"
+
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": content_block.id,
+                                "content": json.dumps(result, default=str)
+                            })
+
+                        elif content_block.name == "generate_chart":
+                            yield f"data: {json.dumps({'type': 'status', 'message': f'Generating chart: {content_block.input.get(\"title\", \"Chart\")}...', 'step': iteration + 1})}\n\n"
+
+                            chart_data = {
+                                "chart_type": content_block.input.get("chart_type", "line"),
+                                "title": content_block.input.get("title", "Chart"),
+                                "labels": content_block.input.get("labels", []),
+                                "datasets": content_block.input.get("datasets", [])
+                            }
+                            generated_charts.append(chart_data)
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": content_block.id,
+                                "content": json.dumps({"success": True, "message": "Chart generated successfully"})
+                            })
+
+                conversation_history.append({"role": "assistant", "content": response.content})
+                conversation_history.append({"role": "user", "content": tool_results})
+
+                # Send analyzing status before next API call
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Analyzing results...', 'step': iteration + 1})}\n\n"
+
+                response = client.messages.create(
+                    model=ANTHROPIC_MODEL,
+                    max_tokens=4096,
+                    system=SYSTEM_PROMPT,
+                    tools=tools,
+                    messages=conversation_history
+                )
+
+            # Extract final response
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Preparing response...', 'step': iteration + 2})}\n\n"
+
+            final_response = ""
+            for content_block in response.content:
+                if hasattr(content_block, 'text'):
+                    final_response += content_block.text
+
+            conversation_history.append({"role": "assistant", "content": final_response})
+
+            # Send final result
+            yield f"data: {json.dumps({'type': 'complete', 'response': final_response, 'queries': executed_queries, 'charts': generated_charts})}\n\n"
+
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return Response(generate(), mimetype='text/event-stream', headers={
+        'Cache-Control': 'no-cache',
+        'X-Accel-Buffering': 'no'
+    })
+
+
+@app.route('/api/chat', methods=['POST'])
+def chat():
+    """Handle chat messages (non-streaming fallback)."""
+    data = request.json
+    user_message = data.get('message', '')
+    session_id = data.get('session_id', 'default')
+
+    if not user_message:
+        return jsonify({'error': 'No message provided'}), 400
+
+    conversation_history = get_or_create_session(session_id)
+    conversation_history.append({"role": "user", "content": user_message})
+
+    # Keep history manageable
+    if len(conversation_history) > 20:
+        conversation_history = conversation_history[-20:]
+        chat_sessions[session_id] = conversation_history
+
+    client = get_anthropic_client()
+    executor = get_query_executor()
+    tools = get_chat_tools()
 
     executed_queries = []
     generated_charts = []
