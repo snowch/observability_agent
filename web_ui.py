@@ -657,26 +657,27 @@ def system_status():
 
     # Get host metrics (CPU, memory, etc.)
     # Filter to only show hosts where we can extract a valid hostname
-    # Note: some collectors emit .utilization, others emit .time - handle both
+    # Only use .utilization metrics (0-1 range), not .usage (byte counts)
     host_query = """
-    SELECT
-        host_name,
-        MAX(cpu_pct) as cpu_pct,
-        MAX(memory_pct) as memory_pct,
-        MAX(disk_pct) as disk_pct,
-        MAX(last_seen) as last_seen
-    FROM (
+    WITH host_metrics AS (
         SELECT
-            REGEXP_EXTRACT(attributes_flat, 'host.name=([^,]+)') as host_name,
-            CASE WHEN metric_name IN ('system.cpu.utilization', 'system.cpu.usage') THEN ROUND(value_double * 100, 1) END as cpu_pct,
-            CASE WHEN metric_name IN ('system.memory.utilization', 'system.memory.usage') THEN ROUND(value_double * 100, 1) END as memory_pct,
-            CASE WHEN metric_name IN ('system.filesystem.utilization', 'system.filesystem.usage') THEN ROUND(value_double * 100, 1) END as disk_pct,
-            timestamp as last_seen
+            TRIM(SPLIT_PART(SPLIT_PART(attributes_flat, 'host.name=', 2), ',', 1)) as host_name,
+            metric_name,
+            value_double,
+            timestamp
         FROM metrics_otel_analytic
-        WHERE metric_name IN ('system.cpu.utilization', 'system.cpu.usage', 'system.memory.utilization', 'system.memory.usage', 'system.filesystem.utilization', 'system.filesystem.usage')
+        WHERE metric_name IN ('system.cpu.utilization', 'system.memory.utilization', 'system.filesystem.utilization')
           AND timestamp > NOW() - INTERVAL '5' MINUTE
           AND attributes_flat LIKE '%host.name=%'
-    ) sub
+          AND value_double >= 0 AND value_double <= 1
+    )
+    SELECT
+        host_name,
+        MAX(CASE WHEN metric_name = 'system.cpu.utilization' THEN ROUND(value_double * 100, 1) END) as cpu_pct,
+        MAX(CASE WHEN metric_name = 'system.memory.utilization' THEN ROUND(value_double * 100, 1) END) as memory_pct,
+        MAX(CASE WHEN metric_name = 'system.filesystem.utilization' THEN ROUND(value_double * 100, 1) END) as disk_pct,
+        MAX(timestamp) as last_seen
+    FROM host_metrics
     WHERE host_name IS NOT NULL AND host_name != ''
     GROUP BY host_name
     """
