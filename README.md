@@ -66,8 +66,25 @@ python diagnostic_chat.py
 | "trace request abc123" | Shows full trace for a specific request |
 | "why is the frontend timing out?" | Diagnoses timeout issues |
 
-### Commands
+### Commands (CLI)
 
 - `/clear` - Clear conversation history
 - `/help` - Show help message
 - `/quit` - Exit the chat
+
+### Web UI
+
+A browser-based interface with real-time system status monitoring.
+
+```bash
+python web_ui.py
+```
+
+Then open http://localhost:5000 in your browser.
+
+**Features:**
+- Chat interface for diagnosing issues
+- Real-time service health dashboard
+- Database status monitoring
+- Recent errors feed
+- Query result visualization

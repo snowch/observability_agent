@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Observability Diagnostic Chat</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            height: 100vh;
+            display: flex;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 300px;
+            background: #16213e;
+            padding: 20px;
+            overflow-y: auto;
+            border-right: 1px solid #0f3460;
+        }
+
+        .sidebar h2 {
+            color: #00d9ff;
+            margin-bottom: 20px;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .status-section {
+            margin-bottom: 30px;
+        }
+
+        .status-card {
+            background: #1a1a2e;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 10px;
+        }
+
+        .status-card h4 {
+            font-size: 12px;
+            color: #888;
+            margin-bottom: 8px;
+        }
+
+        .service-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 0;
+            border-bottom: 1px solid #2a2a4e;
+            font-size: 13px;
+        }
+
+        .service-item:last-child {
+            border-bottom: none;
+        }
+
+        .service-name {
+            color: #ccc;
+        }
+
+        .status-badge {
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .status-healthy {
+            background: #00c853;
+            color: #000;
+        }
+
+        .status-warning {
+            background: #ffc107;
+            color: #000;
+        }
+
+        .status-error {
+            background: #ff5252;
+            color: #fff;
+        }
+
+        .error-item {
+            padding: 8px;
+            background: rgba(255, 82, 82, 0.1);
+            border-left: 3px solid #ff5252;
+            margin-bottom: 8px;
+            border-radius: 0 4px 4px 0;
+            font-size: 12px;
+        }
+
+        .error-service {
+            color: #ff5252;
+            font-weight: 600;
+        }
+
+        .error-span {
+            color: #888;
+            font-size: 11px;
+        }
+
+        /* Main Content */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Header */
+        .header {
+            background: #16213e;
+            padding: 15px 25px;
+            border-bottom: 1px solid #0f3460;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header h1 {
+            font-size: 20px;
+            color: #00d9ff;
+        }
+
+        .header-actions button {
+            background: #0f3460;
+            border: none;
+            color: #00d9ff;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            margin-left: 10px;
+        }
+
+        .header-actions button:hover {
+            background: #1a4a7a;
+        }
+
+        /* Chat Container */
+        .chat-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+        }
+
+        .message {
+            max-width: 85%;
+            margin-bottom: 20px;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message.user {
+            margin-left: auto;
+        }
+
+        .message-content {
+            padding: 15px 20px;
+            border-radius: 12px;
+            line-height: 1.5;
+        }
+
+        .message.user .message-content {
+            background: #0f3460;
+            color: #fff;
+        }
+
+        .message.assistant .message-content {
+            background: #2a2a4e;
+            color: #eee;
+        }
+
+        .message-label {
+            font-size: 11px;
+            color: #666;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+        }
+
+        .message.user .message-label {
+            text-align: right;
+        }
+
+        /* Query Results */
+        .query-block {
+            background: #1a1a2e;
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            margin: 10px 0;
+            overflow: hidden;
+        }
+
+        .query-header {
+            background: #0f3460;
+            padding: 8px 12px;
+            font-size: 12px;
+            color: #00d9ff;
+            display: flex;
+            justify-content: space-between;
+            cursor: pointer;
+        }
+
+        .query-sql {
+            padding: 12px;
+            background: #0d1b2a;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 12px;
+            color: #aaa;
+            white-space: pre-wrap;
+            overflow-x: auto;
+        }
+
+        .query-results {
+            padding: 12px;
+            font-size: 12px;
+        }
+
+        .query-results table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .query-results th {
+            background: #0f3460;
+            padding: 8px;
+            text-align: left;
+            font-size: 11px;
+            color: #00d9ff;
+        }
+
+        .query-results td {
+            padding: 8px;
+            border-bottom: 1px solid #2a2a4e;
+            font-size: 12px;
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* Input Area */
+        .input-area {
+            padding: 20px;
+            background: #16213e;
+            border-top: 1px solid #0f3460;
+        }
+
+        .input-container {
+            display: flex;
+            gap: 10px;
+        }
+
+        .input-container textarea {
+            flex: 1;
+            background: #1a1a2e;
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            padding: 15px;
+            color: #eee;
+            font-size: 14px;
+            resize: none;
+            height: 60px;
+            font-family: inherit;
+        }
+
+        .input-container textarea:focus {
+            outline: none;
+            border-color: #00d9ff;
+        }
+
+        .input-container button {
+            background: #00d9ff;
+            border: none;
+            color: #000;
+            padding: 0 30px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .input-container button:hover {
+            background: #00b8d9;
+        }
+
+        .input-container button:disabled {
+            background: #444;
+            cursor: not-allowed;
+        }
+
+        /* Loading */
+        .loading {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: #888;
+        }
+
+        .loading-dots {
+            display: flex;
+            gap: 4px;
+        }
+
+        .loading-dots span {
+            width: 8px;
+            height: 8px;
+            background: #00d9ff;
+            border-radius: 50%;
+            animation: bounce 1.4s infinite ease-in-out both;
+        }
+
+        .loading-dots span:nth-child(1) { animation-delay: -0.32s; }
+        .loading-dots span:nth-child(2) { animation-delay: -0.16s; }
+
+        @keyframes bounce {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1); }
+        }
+
+        /* Markdown-like styling */
+        .message-content h1, .message-content h2, .message-content h3 {
+            color: #00d9ff;
+            margin: 15px 0 10px 0;
+        }
+
+        .message-content h2 { font-size: 16px; }
+        .message-content h3 { font-size: 14px; }
+
+        .message-content ul, .message-content ol {
+            margin: 10px 0;
+            padding-left: 20px;
+        }
+
+        .message-content li {
+            margin: 5px 0;
+        }
+
+        .message-content code {
+            background: #1a1a2e;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 13px;
+        }
+
+        .message-content pre {
+            background: #1a1a2e;
+            padding: 12px;
+            border-radius: 6px;
+            overflow-x: auto;
+            margin: 10px 0;
+        }
+
+        .message-content pre code {
+            background: none;
+            padding: 0;
+        }
+
+        .message-content strong {
+            color: #00d9ff;
+        }
+
+        /* Responsive */
+        @media (max-width: 900px) {
+            .sidebar {
+                display: none;
+            }
+        }
+
+        /* Refresh button */
+        .refresh-btn {
+            background: none;
+            border: none;
+            color: #00d9ff;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .refresh-btn:hover {
+            text-decoration: underline;
+        }
+
+        .last-updated {
+            font-size: 10px;
+            color: #666;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <aside class="sidebar">
+        <div class="status-section">
+            <h2>System Status <button class="refresh-btn" onclick="refreshStatus()">Refresh</button></h2>
+            <div id="services-status">
+                <div class="status-card">
+                    <h4>Services</h4>
+                    <div id="services-list">Loading...</div>
+                </div>
+            </div>
+            <div class="status-card">
+                <h4>Databases</h4>
+                <div id="databases-list">Loading...</div>
+            </div>
+        </div>
+
+        <div class="status-section">
+            <h2>Recent Errors</h2>
+            <div id="errors-list">Loading...</div>
+        </div>
+
+        <div class="last-updated">Last updated: <span id="last-updated">-</span></div>
+    </aside>
+
+    <main class="main-content">
+        <header class="header">
+            <h1>Observability Diagnostic Chat</h1>
+            <div class="header-actions">
+                <button onclick="clearChat()">Clear Chat</button>
+            </div>
+        </header>
+
+        <div class="chat-container" id="chat-container">
+            <div class="message assistant">
+                <div class="message-label">Assistant</div>
+                <div class="message-content">
+                    <p>Hello! I'm your observability diagnostic assistant. I can help you investigate issues by querying logs, metrics, and traces.</p>
+                    <p><strong>Example questions:</strong></p>
+                    <ul>
+                        <li>"The frontend is slow, what's wrong?"</li>
+                        <li>"Show me errors in the last 5 minutes"</li>
+                        <li>"Why is the checkout service timing out?"</li>
+                        <li>"Trace request abc123"</li>
+                    </ul>
+                    <p>What would you like to investigate?</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="input-area">
+            <div class="input-container">
+                <textarea
+                    id="message-input"
+                    placeholder="Describe the issue you want to investigate..."
+                    onkeydown="handleKeyDown(event)"
+                ></textarea>
+                <button id="send-btn" onclick="sendMessage()">Send</button>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const sessionId = 'session_' + Math.random().toString(36).substr(2, 9);
+        let isLoading = false;
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            refreshStatus();
+            setInterval(refreshStatus, 30000); // Refresh every 30 seconds
+        });
+
+        function handleKeyDown(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('message-input');
+            const message = input.value.trim();
+
+            if (!message || isLoading) return;
+
+            isLoading = true;
+            document.getElementById('send-btn').disabled = true;
+
+            // Add user message
+            addMessage('user', message);
+            input.value = '';
+
+            // Add loading indicator
+            const loadingId = addLoading();
+
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message, session_id: sessionId })
+                });
+
+                const data = await response.json();
+
+                // Remove loading
+                removeLoading(loadingId);
+
+                if (data.error) {
+                    addMessage('assistant', `Error: ${data.error}`);
+                } else {
+                    addMessage('assistant', data.response, data.queries);
+                }
+
+            } catch (error) {
+                removeLoading(loadingId);
+                addMessage('assistant', `Error: ${error.message}`);
+            }
+
+            isLoading = false;
+            document.getElementById('send-btn').disabled = false;
+            refreshStatus();
+        }
+
+        function addMessage(role, content, queries = []) {
+            const container = document.getElementById('chat-container');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${role}`;
+
+            let queriesHtml = '';
+            if (queries && queries.length > 0) {
+                queriesHtml = queries.map((q, i) => `
+                    <div class="query-block">
+                        <div class="query-header" onclick="toggleQuery(this)">
+                            <span>Query ${i + 1}: ${q.result.row_count} rows returned</span>
+                            <span>Click to expand</span>
+                        </div>
+                        <div class="query-content" style="display: none;">
+                            <div class="query-sql">${escapeHtml(q.sql)}</div>
+                            <div class="query-results">${formatQueryResults(q.result)}</div>
+                        </div>
+                    </div>
+                `).join('');
+            }
+
+            messageDiv.innerHTML = `
+                <div class="message-label">${role === 'user' ? 'You' : 'Assistant'}</div>
+                <div class="message-content">${formatMarkdown(content)}</div>
+                ${queriesHtml}
+            `;
+
+            container.appendChild(messageDiv);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function addLoading() {
+            const container = document.getElementById('chat-container');
+            const loadingDiv = document.createElement('div');
+            const loadingId = 'loading_' + Date.now();
+            loadingDiv.id = loadingId;
+            loadingDiv.className = 'message assistant';
+            loadingDiv.innerHTML = `
+                <div class="message-label">Assistant</div>
+                <div class="message-content">
+                    <div class="loading">
+                        <div class="loading-dots">
+                            <span></span><span></span><span></span>
+                        </div>
+                        <span>Investigating...</span>
+                    </div>
+                </div>
+            `;
+            container.appendChild(loadingDiv);
+            container.scrollTop = container.scrollHeight;
+            return loadingId;
+        }
+
+        function removeLoading(loadingId) {
+            const loading = document.getElementById(loadingId);
+            if (loading) loading.remove();
+        }
+
+        function toggleQuery(header) {
+            const content = header.nextElementSibling;
+            content.style.display = content.style.display === 'none' ? 'block' : 'none';
+        }
+
+        function formatQueryResults(result) {
+            if (!result.success) {
+                return `<div style="color: #ff5252;">Error: ${result.error}</div>`;
+            }
+            if (result.rows.length === 0) {
+                return '<div style="color: #888;">No results</div>';
+            }
+
+            const columns = result.columns;
+            const rows = result.rows.slice(0, 20); // Limit display
+
+            let html = '<table><thead><tr>';
+            columns.forEach(col => {
+                html += `<th>${escapeHtml(col)}</th>`;
+            });
+            html += '</tr></thead><tbody>';
+
+            rows.forEach(row => {
+                html += '<tr>';
+                columns.forEach(col => {
+                    const val = row[col] !== null ? String(row[col]) : '';
+                    html += `<td title="${escapeHtml(val)}">${escapeHtml(val.substring(0, 50))}</td>`;
+                });
+                html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+
+            if (result.rows.length > 20) {
+                html += `<div style="margin-top: 10px; color: #888;">Showing 20 of ${result.rows.length} rows</div>`;
+            }
+
+            return html;
+        }
+
+        function formatMarkdown(text) {
+            if (!text) return '';
+
+            // Escape HTML first
+            text = escapeHtml(text);
+
+            // Headers
+            text = text.replace(/^### (.*$)/gm, '<h3>$1</h3>');
+            text = text.replace(/^## (.*$)/gm, '<h2>$1</h2>');
+            text = text.replace(/^# (.*$)/gm, '<h1>$1</h1>');
+
+            // Bold
+            text = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+
+            // Code blocks
+            text = text.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
+
+            // Inline code
+            text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+            // Lists
+            text = text.replace(/^\- (.*$)/gm, '<li>$1</li>');
+            text = text.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
+
+            // Paragraphs
+            text = text.replace(/\n\n/g, '</p><p>');
+            text = '<p>' + text + '</p>';
+
+            // Clean up
+            text = text.replace(/<p><\/p>/g, '');
+            text = text.replace(/<p>(<h[123]>)/g, '$1');
+            text = text.replace(/(<\/h[123]>)<\/p>/g, '$1');
+            text = text.replace(/<p>(<ul>)/g, '$1');
+            text = text.replace(/(<\/ul>)<\/p>/g, '$1');
+            text = text.replace(/<p>(<pre>)/g, '$1');
+            text = text.replace(/(<\/pre>)<\/p>/g, '$1');
+
+            return text;
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        async function clearChat() {
+            await fetch('/api/clear', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_id: sessionId })
+            });
+
+            const container = document.getElementById('chat-container');
+            container.innerHTML = `
+                <div class="message assistant">
+                    <div class="message-label">Assistant</div>
+                    <div class="message-content">
+                        <p>Chat cleared. How can I help you investigate issues?</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function refreshStatus() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+
+                // Update services
+                const servicesList = document.getElementById('services-list');
+                if (data.services && data.services.length > 0) {
+                    servicesList.innerHTML = data.services.map(s => {
+                        const errorPct = parseFloat(s.error_pct) || 0;
+                        let statusClass = 'status-healthy';
+                        let statusText = 'OK';
+                        if (errorPct > 10) {
+                            statusClass = 'status-error';
+                            statusText = `${errorPct}% err`;
+                        } else if (errorPct > 1) {
+                            statusClass = 'status-warning';
+                            statusText = `${errorPct}% err`;
+                        }
+                        return `
+                            <div class="service-item">
+                                <span class="service-name">${s.service_name}</span>
+                                <span class="status-badge ${statusClass}">${statusText}</span>
+                            </div>
+                        `;
+                    }).join('');
+                } else {
+                    servicesList.innerHTML = '<div style="color: #888; font-size: 12px;">No data</div>';
+                }
+
+                // Update databases
+                const dbList = document.getElementById('databases-list');
+                if (data.databases && data.databases.length > 0) {
+                    dbList.innerHTML = data.databases.map(db => `
+                        <div class="service-item">
+                            <span class="service-name">${db.db_system}</span>
+                            <span class="status-badge status-healthy">${db.span_count} spans</span>
+                        </div>
+                    `).join('');
+                } else {
+                    dbList.innerHTML = '<div style="color: #ff5252; font-size: 12px;">No database spans detected!</div>';
+                }
+
+                // Update errors
+                const errorsList = document.getElementById('errors-list');
+                if (data.recent_errors && data.recent_errors.length > 0) {
+                    errorsList.innerHTML = data.recent_errors.slice(0, 5).map(e => `
+                        <div class="error-item">
+                            <div class="error-service">${e.service_name}</div>
+                            <div class="error-span">${e.span_name}</div>
+                        </div>
+                    `).join('');
+                } else {
+                    errorsList.innerHTML = '<div style="color: #00c853; font-size: 12px;">No recent errors</div>';
+                }
+
+                // Update timestamp
+                document.getElementById('last-updated').textContent = new Date().toLocaleTimeString();
+
+            } catch (error) {
+                console.error('Failed to refresh status:', error);
+            }
+        }
+    </script>
+</body>
+</html>
