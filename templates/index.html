@@ -865,6 +865,205 @@
             color: var(--accent-secondary);
             border: 1px solid rgba(124, 58, 237, 0.3);
         }
+
+        /* Time window selector */
+        .chart-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .chart-card-header h4 {
+            margin-bottom: 0;
+        }
+
+        .time-selector {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-secondary);
+            padding: 4px 8px;
+            font-size: 10px;
+            font-family: inherit;
+            cursor: pointer;
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23a0a0b0' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 6px center;
+            padding-right: 22px;
+            transition: all 0.2s;
+        }
+
+        .time-selector:hover {
+            border-color: var(--accent-primary);
+            color: var(--text-primary);
+        }
+
+        .time-selector:focus {
+            outline: none;
+            border-color: var(--accent-primary);
+        }
+
+        .time-selector option {
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+        }
+
+        /* Error modal styling */
+        .modal-type-badge.error {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--accent-error);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+
+        .error-detail-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+
+        .error-detail-card h4 {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .error-detail-row {
+            display: flex;
+            margin-bottom: 8px;
+            font-size: 13px;
+        }
+
+        .error-detail-label {
+            color: var(--text-muted);
+            width: 120px;
+            flex-shrink: 0;
+        }
+
+        .error-detail-value {
+            color: var(--text-primary);
+            font-family: 'JetBrains Mono', monospace;
+            word-break: break-all;
+        }
+
+        .error-detail-value.error-text {
+            color: var(--accent-error);
+        }
+
+        .trace-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+
+        .trace-table th {
+            background: var(--bg-tertiary);
+            padding: 10px 12px;
+            text-align: left;
+            font-weight: 600;
+            color: var(--accent-primary);
+            text-transform: uppercase;
+            font-size: 10px;
+            letter-spacing: 0.5px;
+        }
+
+        .trace-table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border-color);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .trace-table tr:hover td {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .trace-table tr.error-row td {
+            background: rgba(239, 68, 68, 0.08);
+        }
+
+        .trace-depth {
+            color: var(--text-muted);
+            font-size: 10px;
+        }
+
+        /* Error summary card */
+        .error-summary-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .error-summary-card:hover {
+            border-color: var(--border-glow);
+        }
+
+        .error-summary-card.has-errors {
+            border-left: 3px solid var(--accent-error);
+        }
+
+        .error-summary-card.no-errors {
+            border-left: 3px solid var(--accent-success);
+        }
+
+        .error-summary-stats {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .error-count {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--accent-error);
+        }
+
+        .error-count.zero {
+            color: var(--accent-success);
+        }
+
+        .error-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+        }
+
+        .error-services {
+            text-align: right;
+        }
+
+        .error-services-count {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .expand-hint {
+            font-size: 10px;
+            color: var(--text-muted);
+            margin-top: 8px;
+            text-align: center;
+        }
+
+        .errors-list-collapsed {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease;
+        }
+
+        .errors-list-expanded {
+            max-height: 400px;
+            overflow-y: auto;
+            margin-top: 8px;
+        }
     </style>
 </head>
 <body>
@@ -885,12 +1084,21 @@
                     <button class="refresh-btn" onclick="refreshStatus()">Refresh</button>
                 </div>
             </div>
-            <div id="errors-list"><div class="empty-state">Loading...</div></div>
+            <div id="error-summary" class="error-summary-card">
+                <div class="empty-state">Loading...</div>
+            </div>
+            <div id="errors-list" class="errors-list-collapsed"></div>
         </div>
 
         <div class="sidebar-section">
             <div class="section-header">
                 <span class="section-title">Services</span>
+                <select class="time-selector" id="services-time-selector" onchange="refreshStatus()">
+                    <option value="1m">1m</option>
+                    <option value="5m" selected>5m</option>
+                    <option value="15m">15m</option>
+                    <option value="1h">1h</option>
+                </select>
             </div>
             <div class="status-card">
                 <div class="status-card-title">Click to drill down</div>
@@ -994,7 +1202,17 @@
                         <canvas id="throughput-chart"></canvas>
                     </div>
                     <div class="chart-card">
-                        <h4>Top Operations</h4>
+                        <div class="chart-card-header">
+                            <h4>Top Operations</h4>
+                            <select class="time-selector" id="ops-time-selector" onchange="refreshTopOperations()">
+                                <option value="10s">Last 10s</option>
+                                <option value="30s">Last 30s</option>
+                                <option value="1m">Last 1m</option>
+                                <option value="5m" selected>Last 5m</option>
+                                <option value="15m">Last 15m</option>
+                                <option value="1h">Last 1h</option>
+                            </select>
+                        </div>
                         <table class="ops-table" id="ops-table">
                             <thead><tr><th>Operation</th><th>Calls</th><th>Avg Latency</th><th>Error %</th></tr></thead>
                             <tbody></tbody>
@@ -1061,6 +1279,75 @@
         </div>
     </div>
 
+    <!-- Error Drill-down Modal -->
+    <div class="modal-overlay" id="error-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title-row">
+                    <span class="modal-type-badge error">Error</span>
+                    <h2 id="error-modal-title">Error Details</h2>
+                </div>
+                <div class="modal-refresh-controls">
+                    <button class="modal-close" onclick="closeErrorModal()">&times;</button>
+                </div>
+            </div>
+            <div class="modal-body" id="error-modal-body">
+                <div class="error-detail-card">
+                    <h4>Error Information</h4>
+                    <div class="error-detail-row">
+                        <span class="error-detail-label">Service:</span>
+                        <span class="error-detail-value" id="error-service">-</span>
+                    </div>
+                    <div class="error-detail-row">
+                        <span class="error-detail-label">Operation:</span>
+                        <span class="error-detail-value" id="error-operation">-</span>
+                    </div>
+                    <div class="error-detail-row">
+                        <span class="error-detail-label">Timestamp:</span>
+                        <span class="error-detail-value" id="error-timestamp">-</span>
+                    </div>
+                    <div class="error-detail-row">
+                        <span class="error-detail-label">Duration:</span>
+                        <span class="error-detail-value" id="error-duration">-</span>
+                    </div>
+                    <div class="error-detail-row">
+                        <span class="error-detail-label">Trace ID:</span>
+                        <span class="error-detail-value" id="error-trace-id">-</span>
+                    </div>
+                </div>
+
+                <div class="error-detail-card" id="exception-card" style="display: none;">
+                    <h4>Exception Details</h4>
+                    <div class="error-detail-row">
+                        <span class="error-detail-label">Type:</span>
+                        <span class="error-detail-value error-text" id="exception-type">-</span>
+                    </div>
+                    <div class="error-detail-row">
+                        <span class="error-detail-label">Message:</span>
+                        <span class="error-detail-value error-text" id="exception-message">-</span>
+                    </div>
+                </div>
+
+                <div class="error-detail-card">
+                    <h4>Full Trace</h4>
+                    <div style="overflow-x: auto;">
+                        <table class="trace-table" id="trace-table">
+                            <thead>
+                                <tr>
+                                    <th>Service</th>
+                                    <th>Operation</th>
+                                    <th>Duration</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
         const sessionId = 'session_' + Math.random().toString(36).substr(2, 9);
         let isLoading = false;
@@ -1094,6 +1381,20 @@
             if (sidebarRefreshInterval) clearInterval(sidebarRefreshInterval);
             if (sidebarAutoRefresh) {
                 sidebarRefreshInterval = setInterval(refreshStatus, REFRESH_INTERVAL);
+            }
+        }
+
+        function toggleErrorsList() {
+            const errorsList = document.getElementById('errors-list');
+            const errorSummary = document.getElementById('error-summary');
+            const expandHint = errorSummary.querySelector('.expand-hint');
+
+            if (errorsList.classList.contains('errors-list-expanded')) {
+                errorsList.className = 'errors-list-collapsed';
+                if (expandHint) expandHint.textContent = 'Click to expand';
+            } else {
+                errorsList.className = 'errors-list-expanded';
+                if (expandHint) expandHint.textContent = 'Click to collapse';
             }
         }
 
@@ -1398,7 +1699,11 @@
 
         async function refreshStatus() {
             try {
-                const response = await fetch('/api/status');
+                // Get selected time window for services
+                const timeSelector = document.getElementById('services-time-selector');
+                const timeWindow = timeSelector ? timeSelector.value : '5m';
+
+                const response = await fetch(`/api/status?time=${timeWindow}`);
                 const data = await response.json();
 
                 const servicesList = document.getElementById('services-list');
@@ -1444,16 +1749,51 @@
                     dbList.innerHTML = '<div class="empty-state" style="color: var(--accent-error);">No database spans!</div>';
                 }
 
+                // Error summary card
+                const errorSummary = document.getElementById('error-summary');
                 const errorsList = document.getElementById('errors-list');
-                if (data.recent_errors && data.recent_errors.length > 0) {
-                    errorsList.innerHTML = data.recent_errors.slice(0, 5).map(e => `
-                        <div class="error-item">
-                            <div class="error-service">${e.service_name}</div>
-                            <div class="error-span">${e.span_name}</div>
+                const totalErrors = data.error_summary?.total_errors || 0;
+                const affectedServices = data.error_summary?.affected_services || 0;
+
+                if (totalErrors > 0) {
+                    errorSummary.className = 'error-summary-card has-errors';
+                    errorSummary.innerHTML = `
+                        <div class="error-summary-stats">
+                            <div>
+                                <div class="error-count">${totalErrors}</div>
+                                <div class="error-label">errors (5m)</div>
+                            </div>
+                            <div class="error-services">
+                                <div class="error-services-count">${affectedServices}</div>
+                                <div class="error-label">services</div>
+                            </div>
                         </div>
-                    `).join('');
+                        <div class="expand-hint">Click to ${errorsList.classList.contains('errors-list-expanded') ? 'collapse' : 'expand'}</div>
+                    `;
+                    errorSummary.onclick = toggleErrorsList;
+
+                    // Populate errors list
+                    if (data.recent_errors && data.recent_errors.length > 0) {
+                        errorsList.innerHTML = data.recent_errors.map(e => `
+                            <div class="error-item" onclick="event.stopPropagation(); openErrorModal('${e.trace_id}', '${e.span_id}')">
+                                <div class="error-service">${e.service_name}</div>
+                                <div class="error-span">${e.span_name}</div>
+                            </div>
+                        `).join('');
+                    }
                 } else {
-                    errorsList.innerHTML = '<div class="empty-state" style="color: var(--accent-success);">No recent errors</div>';
+                    errorSummary.className = 'error-summary-card no-errors';
+                    errorSummary.innerHTML = `
+                        <div class="error-summary-stats">
+                            <div>
+                                <div class="error-count zero">0</div>
+                                <div class="error-label">errors (5m)</div>
+                            </div>
+                        </div>
+                    `;
+                    errorSummary.onclick = null;
+                    errorsList.innerHTML = '';
+                    errorsList.className = 'errors-list-collapsed';
                 }
 
                 document.getElementById('last-updated').textContent = new Date().toLocaleTimeString();
@@ -1550,9 +1890,27 @@
                     });
                 }
 
+            } catch (error) {
+                console.error('Failed to load service details:', error);
+            }
+
+            // Also load top operations with selected time window
+            await refreshTopOperations();
+        }
+
+        async function refreshTopOperations() {
+            if (!currentModalService) return;
+
+            const timeSelector = document.getElementById('ops-time-selector');
+            const timeWindow = timeSelector ? timeSelector.value : '5m';
+
+            try {
+                const response = await fetch(`/api/service/${encodeURIComponent(currentModalService)}/operations?time=${timeWindow}`);
+                const data = await response.json();
+
                 const opsTable = document.getElementById('ops-table').querySelector('tbody');
-                if (data.top_operations && data.top_operations.length > 0) {
-                    opsTable.innerHTML = data.top_operations.map(op => `
+                if (data.operations && data.operations.length > 0) {
+                    opsTable.innerHTML = data.operations.map(op => `
                         <tr>
                             <td title="${escapeHtml(op.span_name)}">${escapeHtml(op.span_name.substring(0, 30))}</td>
                             <td>${op.call_count}</td>
@@ -1563,9 +1921,8 @@
                 } else {
                     opsTable.innerHTML = '<tr><td colspan="4" class="empty-state">No data</td></tr>';
                 }
-
             } catch (error) {
-                console.error('Failed to load service details:', error);
+                console.error('Failed to load top operations:', error);
             }
         }
 
@@ -1749,6 +2106,60 @@
             dbModalAutoRefresh = false;
         }
 
+        // Error Modal Functions
+        async function openErrorModal(traceId, spanId) {
+            document.getElementById('error-modal').classList.add('active');
+            document.getElementById('error-modal-title').textContent = 'Loading...';
+
+            try {
+                const response = await fetch(`/api/error/${encodeURIComponent(traceId)}/${encodeURIComponent(spanId)}`);
+                const data = await response.json();
+
+                if (data.error_info) {
+                    const info = data.error_info;
+                    document.getElementById('error-modal-title').textContent = info.span_name || 'Error Details';
+                    document.getElementById('error-service').textContent = info.service_name || '-';
+                    document.getElementById('error-operation').textContent = info.span_name || '-';
+                    document.getElementById('error-timestamp').textContent = info.start_time ? new Date(info.start_time).toLocaleString() : '-';
+                    document.getElementById('error-duration').textContent = info.duration_ms ? `${info.duration_ms}ms` : '-';
+                    document.getElementById('error-trace-id').textContent = traceId;
+                }
+
+                // Exception details
+                const exceptionCard = document.getElementById('exception-card');
+                if (data.exception && data.exception.exception_type) {
+                    exceptionCard.style.display = 'block';
+                    document.getElementById('exception-type').textContent = data.exception.exception_type || '-';
+                    document.getElementById('exception-message').textContent = data.exception.exception_message || '-';
+                } else {
+                    exceptionCard.style.display = 'none';
+                }
+
+                // Full trace
+                const traceTable = document.getElementById('trace-table').querySelector('tbody');
+                if (data.trace && data.trace.length > 0) {
+                    traceTable.innerHTML = data.trace.map(span => `
+                        <tr class="${span.status_code === 'ERROR' ? 'error-row' : ''}">
+                            <td>${escapeHtml(span.service_name)}</td>
+                            <td title="${escapeHtml(span.span_name)}">${escapeHtml(span.span_name.substring(0, 40))}</td>
+                            <td>${span.duration_ms}ms</td>
+                            <td style="color: ${span.status_code === 'ERROR' ? 'var(--accent-error)' : 'var(--accent-success)'}">${span.status_code || 'OK'}</td>
+                        </tr>
+                    `).join('');
+                } else {
+                    traceTable.innerHTML = '<tr><td colspan="4" class="empty-state">No trace data</td></tr>';
+                }
+
+            } catch (error) {
+                console.error('Failed to load error details:', error);
+                document.getElementById('error-modal-title').textContent = 'Error loading details';
+            }
+        }
+
+        function closeErrorModal() {
+            document.getElementById('error-modal').classList.remove('active');
+        }
+
         document.getElementById('service-modal').addEventListener('click', function(e) {
             if (e.target === this) closeModal();
         });
@@ -1757,10 +2168,15 @@
             if (e.target === this) closeDatabaseModal();
         });
 
+        document.getElementById('error-modal').addEventListener('click', function(e) {
+            if (e.target === this) closeErrorModal();
+        });
+
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Escape') {
                 closeModal();
                 closeDatabaseModal();
+                closeErrorModal();
             }
         });
     </script>
