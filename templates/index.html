@@ -521,6 +521,22 @@
         .message-content h3 { font-size: 14px; }
         .message-content ul, .message-content ol { margin: 12px 0; padding-left: 24px; }
         .message-content li { margin: 6px 0; }
+        .message-content .prompt-hints { list-style: none; padding-left: 0; }
+        .message-content .prompt-hints li {
+            cursor: pointer;
+            padding: 8px 12px;
+            margin: 4px 0;
+            background: var(--bg-primary);
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            transition: all 0.2s ease;
+            color: var(--accent-primary);
+        }
+        .message-content .prompt-hints li:hover {
+            background: var(--bg-secondary);
+            border-color: var(--accent-primary);
+            transform: translateX(4px);
+        }
         .message-content code {
             background: var(--bg-primary);
             padding: 3px 8px;
@@ -1594,13 +1610,13 @@
                 <div class="message-content">
                     <p>Hello! I'm your observability diagnostic assistant. I can help you investigate issues by querying logs, metrics, and traces.</p>
                     <p><strong>Example questions:</strong></p>
-                    <ul>
-                        <li>"The frontend is slow, what's wrong?"</li>
-                        <li>"Show me errors in the last 5 minutes"</li>
-                        <li>"Show me a graph of latency for checkout service"</li>
-                        <li>"Chart error rates by service over the last hour"</li>
-                        <li>"Show me the topology for PostgreSQL - what depends on it?"</li>
-                        <li>"What does the frontend depend on?" (show upstream deps)</li>
+                    <ul class="prompt-hints">
+                        <li onclick="setPrompt('The frontend is slow, what\\'s wrong?')">The frontend is slow, what's wrong?</li>
+                        <li onclick="setPrompt('Show me errors in the last 5 minutes')">Show me errors in the last 5 minutes</li>
+                        <li onclick="setPrompt('Show me a graph of latency for checkout service')">Show me a graph of latency for checkout service</li>
+                        <li onclick="setPrompt('Chart error rates by service over the last hour')">Chart error rates by service over the last hour</li>
+                        <li onclick="setPrompt('Show me the topology for PostgreSQL - what depends on it?')">Show me the topology for PostgreSQL - what depends on it?</li>
+                        <li onclick="setPrompt('What does the frontend depend on?')">What does the frontend depend on? (show upstream deps)</li>
                     </ul>
                     <p>What would you like to investigate?</p>
                 </div>
@@ -2113,6 +2129,12 @@
             await loadServiceData(currentModalService);
 
             btn.classList.remove('spinning');
+        }
+
+        function setPrompt(text) {
+            const input = document.getElementById('message-input');
+            input.value = text;
+            input.focus();
         }
 
         function handleKeyDown(event) {
