@@ -62,6 +62,9 @@ receivers:
       disk:
       load:
       filesystem:
+        metrics:
+          system.filesystem.utilization:
+            enabled: true
         exclude_mount_points:
           mount_points:
             - /dev/*
@@ -167,6 +170,15 @@ processors:
     spike_limit_percentage: 25
   resourcedetection:
     detectors: [env, docker, system]
+    system:
+      hostname_sources: ["os"]
+      resource_attributes:
+        host.name:
+          enabled: true
+        host.id:
+          enabled: true
+        os.type:
+          enabled: true
   transform:
     error_mode: ignore
     trace_statements:
