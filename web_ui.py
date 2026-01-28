@@ -314,23 +314,38 @@ def clear_session():
 def system_status():
     """Get current system status."""
     executor = get_query_executor()
+    time_param = request.args.get('time', '5m')
+
+    # Parse time parameter
+    time_value = int(time_param[:-1])
+    time_unit = time_param[-1]
+
+    if time_unit == 's':
+        interval = f"'{time_value}' SECOND"
+    elif time_unit == 'm':
+        interval = f"'{time_value}' MINUTE"
+    elif time_unit == 'h':
+        interval = f"'{time_value}' HOUR"
+    else:
+        interval = "'5' MINUTE"
 
     status = {
         'services': [],
         'databases': [],
         'recent_errors': [],
+        'error_summary': {},
         'timestamp': datetime.utcnow().isoformat()
     }
 
-    # Get service health
-    service_query = """
+    # Get service health with configurable time window
+    service_query = f"""
     SELECT service_name,
            COUNT(*) as total_spans,
            SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) as errors,
-           ROUND(100.0 * SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) / COUNT(*), 2) as error_pct,
+           ROUND(100.0 * SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) as error_pct,
            ROUND(AVG(duration_ns / 1000000.0), 2) as avg_latency_ms
     FROM traces_otel_analytic
-    WHERE start_time > NOW() - INTERVAL '5' MINUTE
+    WHERE start_time > NOW() - INTERVAL {interval}
     GROUP BY service_name
     ORDER BY total_spans DESC
     """
@@ -353,9 +368,22 @@ def system_status():
     if result['success']:
         status['databases'] = result['rows']
 
-    # Get recent errors
+    # Get error summary stats
+    error_summary_query = """
+    SELECT
+        COUNT(*) as total_errors,
+        COUNT(DISTINCT service_name) as affected_services
+    FROM traces_otel_analytic
+    WHERE status_code = 'ERROR'
+      AND start_time > NOW() - INTERVAL '5' MINUTE
+    """
+    result = executor.execute_query(error_summary_query)
+    if result['success'] and result['rows']:
+        status['error_summary'] = result['rows'][0]
+
+    # Get recent errors with trace_id and span_id for drill-down
     error_query = """
-    SELECT service_name, span_name, status_code,
+    SELECT trace_id, span_id, service_name, span_name, status_code,
            duration_ns / 1000000.0 as duration_ms,
            start_time
     FROM traces_otel_analytic
@@ -467,6 +495,97 @@ def service_details(service_name):
         data['top_operations'] = result['rows']
 
     return jsonify(data)
+
+
+@app.route('/api/error/<trace_id>/<span_id>', methods=['GET'])
+def error_details(trace_id, span_id):
+    """Get detailed information about a specific error."""
+    executor = get_query_executor()
+
+    data = {
+        'error_info': None,
+        'exception': None,
+        'trace': []
+    }
+
+    # Get error span info
+    error_query = f"""
+    SELECT service_name, span_name, span_kind, status_code,
+           duration_ns / 1000000.0 as duration_ms,
+           start_time, db_system
+    FROM traces_otel_analytic
+    WHERE trace_id = '{trace_id}' AND span_id = '{span_id}'
+    LIMIT 1
+    """
+    result = executor.execute_query(error_query)
+    if result['success'] and result['rows']:
+        data['error_info'] = result['rows'][0]
+
+    # Get exception details from span_events
+    exception_query = f"""
+    SELECT exception_type, exception_message
+    FROM span_events_otel_analytic
+    WHERE trace_id = '{trace_id}' AND span_id = '{span_id}'
+      AND exception_type IS NOT NULL AND exception_type != ''
+    LIMIT 1
+    """
+    result = executor.execute_query(exception_query)
+    if result['success'] and result['rows']:
+        data['exception'] = result['rows'][0]
+
+    # Get full trace for context
+    trace_query = f"""
+    SELECT service_name, span_name, span_kind, status_code,
+           duration_ns / 1000000.0 as duration_ms,
+           start_time, parent_span_id
+    FROM traces_otel_analytic
+    WHERE trace_id = '{trace_id}'
+    ORDER BY start_time
+    """
+    result = executor.execute_query(trace_query)
+    if result['success']:
+        data['trace'] = result['rows']
+
+    return jsonify(data)
+
+
+@app.route('/api/service/<service_name>/operations', methods=['GET'])
+def service_operations(service_name):
+    """Get top operations for a service with configurable time window."""
+    executor = get_query_executor()
+    time_param = request.args.get('time', '5m')
+
+    # Parse time parameter (e.g., "10s", "1m", "5m", "1h")
+    time_value = int(time_param[:-1])
+    time_unit = time_param[-1]
+
+    if time_unit == 's':
+        interval = f"'{time_value}' SECOND"
+    elif time_unit == 'm':
+        interval = f"'{time_value}' MINUTE"
+    elif time_unit == 'h':
+        interval = f"'{time_value}' HOUR"
+    else:
+        interval = "'5' MINUTE"  # default
+
+    top_ops_query = f"""
+    SELECT span_name,
+           COUNT(*) as call_count,
+           ROUND(AVG(duration_ns / 1000000.0), 2) as avg_latency_ms,
+           ROUND(100.0 * SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) as error_pct
+    FROM traces_otel_analytic
+    WHERE service_name = '{service_name}'
+      AND start_time > NOW() - INTERVAL {interval}
+    GROUP BY span_name
+    ORDER BY call_count DESC
+    LIMIT 10
+    """
+    result = executor.execute_query(top_ops_query)
+
+    if result['success']:
+        return jsonify({'operations': result['rows']})
+    else:
+        return jsonify({'operations': [], 'error': result.get('error')})
 
 
 @app.route('/api/database/<db_system>', methods=['GET'])
