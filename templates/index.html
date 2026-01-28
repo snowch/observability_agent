@@ -1266,6 +1266,144 @@
         .legend-dot.database { background: #7c3aed; }
         .legend-dot.external { background: #f59e0b; }
         .legend-dot.error { background: #ef4444; }
+
+        /* Modal tabs */
+        .modal-tabs {
+            display: flex;
+            gap: 4px;
+            padding: 0 24px 16px 24px;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--bg-secondary);
+        }
+
+        .modal-tab {
+            padding: 10px 20px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px 8px 0 0;
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .modal-tab:hover {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-primary);
+        }
+
+        .modal-tab.active {
+            background: var(--bg-primary);
+            border-color: var(--accent-primary);
+            border-bottom-color: var(--bg-primary);
+            color: var(--accent-primary);
+        }
+
+        .modal-tab-content {
+            display: none;
+        }
+
+        .modal-tab-content.active {
+            display: block;
+        }
+
+        .tab-badge {
+            background: var(--bg-secondary);
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 10px;
+            color: var(--text-muted);
+        }
+
+        .modal-tab.active .tab-badge {
+            background: rgba(0, 217, 255, 0.15);
+            color: var(--accent-primary);
+        }
+
+        /* Data tables for logs/traces/metrics */
+        .data-table-container {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+
+        .data-table th {
+            background: var(--bg-tertiary);
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+            color: var(--accent-primary);
+            text-transform: uppercase;
+            font-size: 10px;
+            letter-spacing: 0.5px;
+            position: sticky;
+            top: 0;
+        }
+
+        .data-table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border-color);
+            font-family: 'JetBrains Mono', monospace;
+            max-width: 300px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .data-table tr:hover td {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .data-table tr.error-row td {
+            background: rgba(239, 68, 68, 0.08);
+        }
+
+        .data-table-wrapper {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .severity-debug { color: var(--text-muted); }
+        .severity-info { color: var(--accent-primary); }
+        .severity-warn { color: var(--accent-warning); }
+        .severity-error { color: var(--accent-error); }
+
+        .log-body {
+            max-width: 500px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            cursor: pointer;
+        }
+
+        .log-body:hover {
+            white-space: normal;
+            word-break: break-all;
+        }
+
+        .tab-controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .tab-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
     </style>
 </head>
 <body>
@@ -1351,6 +1489,7 @@
                         <li>"Show me a graph of latency for checkout service"</li>
                         <li>"Chart error rates by service over the last hour"</li>
                         <li>"Show me the topology for PostgreSQL - what depends on it?"</li>
+                        <li>"What does the frontend depend on?" (show upstream deps)</li>
                     </ul>
                     <p>What would you like to investigate?</p>
                 </div>
@@ -1398,38 +1537,135 @@
                     <button class="modal-close" onclick="closeModal()">&times;</button>
                 </div>
             </div>
+            <div class="modal-tabs">
+                <div class="modal-tab active" onclick="switchModalTab('charts')">Charts</div>
+                <div class="modal-tab" onclick="switchModalTab('traces')">Traces <span class="tab-badge" id="traces-count">-</span></div>
+                <div class="modal-tab" onclick="switchModalTab('logs')">Logs <span class="tab-badge" id="logs-count">-</span></div>
+                <div class="modal-tab" onclick="switchModalTab('metrics')">Metrics <span class="tab-badge" id="metrics-count">-</span></div>
+            </div>
             <div class="modal-body" id="modal-body">
-                <div class="chart-row">
-                    <div class="chart-card">
-                        <h4>Latency Over Time</h4>
-                        <canvas id="latency-chart"></canvas>
+                <!-- Charts Tab -->
+                <div class="modal-tab-content active" id="tab-charts">
+                    <div class="chart-row">
+                        <div class="chart-card">
+                            <h4>Latency Over Time</h4>
+                            <canvas id="latency-chart"></canvas>
+                        </div>
+                        <div class="chart-card">
+                            <h4>Error Rate Over Time</h4>
+                            <canvas id="error-chart"></canvas>
+                        </div>
                     </div>
-                    <div class="chart-card">
-                        <h4>Error Rate Over Time</h4>
-                        <canvas id="error-chart"></canvas>
+                    <div class="chart-row">
+                        <div class="chart-card">
+                            <h4>Request Volume</h4>
+                            <canvas id="throughput-chart"></canvas>
+                        </div>
+                        <div class="chart-card">
+                            <div class="chart-card-header">
+                                <h4>Top Operations</h4>
+                                <select class="time-selector" id="ops-time-selector" onchange="refreshTopOperations()">
+                                    <option value="10s">Last 10s</option>
+                                    <option value="30s">Last 30s</option>
+                                    <option value="1m">Last 1m</option>
+                                    <option value="5m" selected>Last 5m</option>
+                                    <option value="15m">Last 15m</option>
+                                    <option value="1h">Last 1h</option>
+                                </select>
+                            </div>
+                            <table class="ops-table" id="ops-table">
+                                <thead><tr><th>Operation</th><th>Calls</th><th>Avg Latency</th><th>Error %</th></tr></thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
-                <div class="chart-row">
-                    <div class="chart-card">
-                        <h4>Request Volume</h4>
-                        <canvas id="throughput-chart"></canvas>
+
+                <!-- Traces Tab -->
+                <div class="modal-tab-content" id="tab-traces">
+                    <div class="tab-controls">
+                        <span class="tab-title">Recent Traces</span>
+                        <select class="time-selector" id="traces-time-selector" onchange="loadServiceTraces()">
+                            <option value="1m">Last 1m</option>
+                            <option value="5m" selected>Last 5m</option>
+                            <option value="15m">Last 15m</option>
+                            <option value="1h">Last 1h</option>
+                        </select>
                     </div>
-                    <div class="chart-card">
-                        <div class="chart-card-header">
-                            <h4>Top Operations</h4>
-                            <select class="time-selector" id="ops-time-selector" onchange="refreshTopOperations()">
-                                <option value="10s">Last 10s</option>
-                                <option value="30s">Last 30s</option>
-                                <option value="1m">Last 1m</option>
-                                <option value="5m" selected>Last 5m</option>
-                                <option value="15m">Last 15m</option>
-                                <option value="1h">Last 1h</option>
-                            </select>
+                    <div class="data-table-container">
+                        <div class="data-table-wrapper">
+                            <table class="data-table" id="traces-table">
+                                <thead>
+                                    <tr>
+                                        <th>Time</th>
+                                        <th>Operation</th>
+                                        <th>Kind</th>
+                                        <th>Duration</th>
+                                        <th>Status</th>
+                                        <th>Trace ID</th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
                         </div>
-                        <table class="ops-table" id="ops-table">
-                            <thead><tr><th>Operation</th><th>Calls</th><th>Avg Latency</th><th>Error %</th></tr></thead>
-                            <tbody></tbody>
-                        </table>
+                    </div>
+                </div>
+
+                <!-- Logs Tab -->
+                <div class="modal-tab-content" id="tab-logs">
+                    <div class="tab-controls">
+                        <span class="tab-title">Recent Logs</span>
+                        <select class="time-selector" id="logs-time-selector" onchange="loadServiceLogs()">
+                            <option value="1m">Last 1m</option>
+                            <option value="5m" selected>Last 5m</option>
+                            <option value="15m">Last 15m</option>
+                            <option value="1h">Last 1h</option>
+                        </select>
+                    </div>
+                    <div class="data-table-container">
+                        <div class="data-table-wrapper">
+                            <table class="data-table" id="logs-table">
+                                <thead>
+                                    <tr>
+                                        <th>Time</th>
+                                        <th>Severity</th>
+                                        <th>Message</th>
+                                        <th>Trace ID</th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Metrics Tab -->
+                <div class="modal-tab-content" id="tab-metrics">
+                    <div class="tab-controls">
+                        <span class="tab-title">Service Metrics</span>
+                        <select class="time-selector" id="metrics-time-selector" onchange="loadServiceMetrics()">
+                            <option value="1m">Last 1m</option>
+                            <option value="5m" selected>Last 5m</option>
+                            <option value="15m">Last 15m</option>
+                            <option value="1h">Last 1h</option>
+                        </select>
+                    </div>
+                    <div class="data-table-container">
+                        <div class="data-table-wrapper">
+                            <table class="data-table" id="metrics-table">
+                                <thead>
+                                    <tr>
+                                        <th>Metric Name</th>
+                                        <th>Data Points</th>
+                                        <th>Avg Value</th>
+                                        <th>Min</th>
+                                        <th>Max</th>
+                                        <th>Last Seen</th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -2389,6 +2625,147 @@
             stopModalAutoRefresh();
             currentModalService = null;
             modalAutoRefresh = false;
+            // Reset to charts tab
+            switchModalTab('charts');
+        }
+
+        // Tab switching function
+        function switchModalTab(tabName) {
+            // Update tab buttons
+            document.querySelectorAll('.modal-tabs .modal-tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.querySelector(`.modal-tabs .modal-tab[onclick*="${tabName}"]`).classList.add('active');
+
+            // Update tab content
+            document.querySelectorAll('.modal-tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            document.getElementById(`tab-${tabName}`).classList.add('active');
+
+            // Load data for the tab if needed
+            if (tabName === 'traces' && currentModalService) {
+                loadServiceTraces();
+            } else if (tabName === 'logs' && currentModalService) {
+                loadServiceLogs();
+            } else if (tabName === 'metrics' && currentModalService) {
+                loadServiceMetrics();
+            }
+        }
+
+        async function loadServiceTraces() {
+            if (!currentModalService) return;
+
+            const timeSelector = document.getElementById('traces-time-selector');
+            const timeWindow = timeSelector ? timeSelector.value : '5m';
+
+            try {
+                const response = await fetch(`/api/service/${encodeURIComponent(currentModalService)}/traces?time=${timeWindow}&limit=50`);
+                const data = await response.json();
+
+                const tbody = document.getElementById('traces-table').querySelector('tbody');
+                const countBadge = document.getElementById('traces-count');
+
+                if (data.traces && data.traces.length > 0) {
+                    countBadge.textContent = data.traces.length;
+                    tbody.innerHTML = data.traces.map(t => {
+                        const time = t.start_time ? new Date(t.start_time).toLocaleTimeString() : '-';
+                        const isError = t.status_code === 'ERROR';
+                        return `
+                            <tr class="${isError ? 'error-row' : ''}" onclick="openErrorModal('${t.trace_id}', '${t.span_id}')" style="cursor: pointer;">
+                                <td>${time}</td>
+                                <td title="${escapeHtml(t.span_name)}">${escapeHtml((t.span_name || '-').substring(0, 40))}</td>
+                                <td>${t.span_kind || '-'}</td>
+                                <td>${t.duration_ms}ms</td>
+                                <td style="color: ${isError ? 'var(--accent-error)' : 'var(--accent-success)'}">${t.status_code || 'OK'}</td>
+                                <td title="${t.trace_id}">${(t.trace_id || '').substring(0, 12)}...</td>
+                            </tr>
+                        `;
+                    }).join('');
+                } else {
+                    countBadge.textContent = '0';
+                    tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No traces found</td></tr>';
+                }
+            } catch (error) {
+                console.error('Failed to load traces:', error);
+            }
+        }
+
+        async function loadServiceLogs() {
+            if (!currentModalService) return;
+
+            const timeSelector = document.getElementById('logs-time-selector');
+            const timeWindow = timeSelector ? timeSelector.value : '5m';
+
+            try {
+                const response = await fetch(`/api/service/${encodeURIComponent(currentModalService)}/logs?time=${timeWindow}&limit=50`);
+                const data = await response.json();
+
+                const tbody = document.getElementById('logs-table').querySelector('tbody');
+                const countBadge = document.getElementById('logs-count');
+
+                if (data.logs && data.logs.length > 0) {
+                    countBadge.textContent = data.logs.length;
+                    tbody.innerHTML = data.logs.map(log => {
+                        const time = log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : '-';
+                        const severity = (log.severity_text || 'INFO').toUpperCase();
+                        const severityClass = severity === 'ERROR' ? 'severity-error' :
+                                             severity === 'WARN' || severity === 'WARNING' ? 'severity-warn' :
+                                             severity === 'DEBUG' ? 'severity-debug' : 'severity-info';
+                        const isError = severity === 'ERROR';
+                        return `
+                            <tr class="${isError ? 'error-row' : ''}">
+                                <td>${time}</td>
+                                <td class="${severityClass}">${severity}</td>
+                                <td class="log-body" title="${escapeHtml(log.body || '')}">${escapeHtml((log.body || '-').substring(0, 100))}</td>
+                                <td title="${log.trace_id || ''}">${log.trace_id ? (log.trace_id.substring(0, 12) + '...') : '-'}</td>
+                            </tr>
+                        `;
+                    }).join('');
+                } else {
+                    countBadge.textContent = '0';
+                    tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No logs found</td></tr>';
+                }
+            } catch (error) {
+                console.error('Failed to load logs:', error);
+            }
+        }
+
+        async function loadServiceMetrics() {
+            if (!currentModalService) return;
+
+            const timeSelector = document.getElementById('metrics-time-selector');
+            const timeWindow = timeSelector ? timeSelector.value : '5m';
+
+            try {
+                const response = await fetch(`/api/service/${encodeURIComponent(currentModalService)}/metrics?time=${timeWindow}&limit=50`);
+                const data = await response.json();
+
+                const tbody = document.getElementById('metrics-table').querySelector('tbody');
+                const countBadge = document.getElementById('metrics-count');
+
+                if (data.metrics && data.metrics.length > 0) {
+                    countBadge.textContent = data.metrics.length;
+                    tbody.innerHTML = data.metrics.map(m => {
+                        const lastSeen = m.last_seen ? new Date(m.last_seen).toLocaleTimeString() : '-';
+                        return `
+                            <tr>
+                                <td title="${escapeHtml(m.metric_name)}">${escapeHtml((m.metric_name || '-').substring(0, 40))}</td>
+                                <td>${m.data_points}</td>
+                                <td>${m.avg_value !== null ? m.avg_value : '-'}</td>
+                                <td>${m.min_value !== null ? m.min_value : '-'}</td>
+                                <td>${m.max_value !== null ? m.max_value : '-'}</td>
+                                <td>${lastSeen}</td>
+                            </tr>
+                        `;
+                    }).join('');
+                } else {
+                    countBadge.textContent = '0';
+                    tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No metrics found</td></tr>';
+                }
+            } catch (error) {
+                console.error('Failed to load metrics:', error);
+            }
         }
 
         // Database Modal Functions

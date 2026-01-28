@@ -825,6 +825,120 @@ def error_details(trace_id, span_id):
     return jsonify(data)
 
 
+@app.route('/api/service/<service_name>/logs', methods=['GET'])
+def service_logs(service_name):
+    """Get recent logs for a specific service."""
+    executor = get_query_executor()
+    limit = min(int(request.args.get('limit', '20')), 100)
+    time_param = request.args.get('time', '5m')
+
+    # Parse time parameter
+    time_value = int(time_param[:-1])
+    time_unit = time_param[-1]
+    if time_unit == 's':
+        interval = f"'{time_value}' SECOND"
+    elif time_unit == 'm':
+        interval = f"'{time_value}' MINUTE"
+    elif time_unit == 'h':
+        interval = f"'{time_value}' HOUR"
+    else:
+        interval = "'5' MINUTE"
+
+    logs_query = f"""
+    SELECT timestamp, severity_text, body, trace_id, span_id
+    FROM logs_otel_analytic
+    WHERE service_name = '{service_name}'
+      AND timestamp > NOW() - INTERVAL {interval}
+    ORDER BY timestamp DESC
+    LIMIT {limit}
+    """
+    result = executor.execute_query(logs_query)
+
+    if result['success']:
+        return jsonify({'logs': result['rows']})
+    else:
+        return jsonify({'logs': [], 'error': result.get('error')})
+
+
+@app.route('/api/service/<service_name>/traces', methods=['GET'])
+def service_traces(service_name):
+    """Get recent traces for a specific service."""
+    executor = get_query_executor()
+    limit = min(int(request.args.get('limit', '20')), 100)
+    time_param = request.args.get('time', '5m')
+
+    # Parse time parameter
+    time_value = int(time_param[:-1])
+    time_unit = time_param[-1]
+    if time_unit == 's':
+        interval = f"'{time_value}' SECOND"
+    elif time_unit == 'm':
+        interval = f"'{time_value}' MINUTE"
+    elif time_unit == 'h':
+        interval = f"'{time_value}' HOUR"
+    else:
+        interval = "'5' MINUTE"
+
+    traces_query = f"""
+    SELECT trace_id, span_id, span_name, span_kind, status_code,
+           ROUND(duration_ns / 1000000.0, 2) as duration_ms,
+           start_time, db_system
+    FROM traces_otel_analytic
+    WHERE service_name = '{service_name}'
+      AND start_time > NOW() - INTERVAL {interval}
+    ORDER BY start_time DESC
+    LIMIT {limit}
+    """
+    result = executor.execute_query(traces_query)
+
+    if result['success']:
+        return jsonify({'traces': result['rows']})
+    else:
+        return jsonify({'traces': [], 'error': result.get('error')})
+
+
+@app.route('/api/service/<service_name>/metrics', methods=['GET'])
+def service_metrics(service_name):
+    """Get recent metrics for a specific service."""
+    executor = get_query_executor()
+    limit = min(int(request.args.get('limit', '20')), 100)
+    time_param = request.args.get('time', '5m')
+
+    # Parse time parameter
+    time_value = int(time_param[:-1])
+    time_unit = time_param[-1]
+    if time_unit == 's':
+        interval = f"'{time_value}' SECOND"
+    elif time_unit == 'm':
+        interval = f"'{time_value}' MINUTE"
+    elif time_unit == 'h':
+        interval = f"'{time_value}' HOUR"
+    else:
+        interval = "'5' MINUTE"
+
+    # Get metrics summary by metric name for this service
+    metrics_query = f"""
+    SELECT metric_name,
+           COUNT(*) as data_points,
+           ROUND(AVG(value_double), 4) as avg_value,
+           ROUND(MIN(value_double), 4) as min_value,
+           ROUND(MAX(value_double), 4) as max_value,
+           MAX(timestamp) as last_seen
+    FROM metrics_otel_analytic
+    WHERE service_name = '{service_name}'
+      AND timestamp > NOW() - INTERVAL {interval}
+    GROUP BY metric_name
+    ORDER BY data_points DESC
+    LIMIT {limit}
+    """
+    result = executor.execute_query(metrics_query)
+
+    if result['success']:
+        return jsonify({'metrics': result['rows']})
+    else:
+        return jsonify({'metrics': [], 'error': result.get('error')})
+
+
 @app.route('/api/service/<service_name>/operations', methods=['GET'])
 def service_operations(service_name):
     """Get top operations for a service with configurable time window."""
