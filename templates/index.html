@@ -1161,6 +1161,50 @@
             color: var(--accent-primary);
             font-family: 'JetBrains Mono', monospace;
         }
+
+        /* Host metrics styling */
+        .host-item {
+            padding: 10px 12px;
+            margin: -2px -8px;
+            border-radius: 10px;
+        }
+
+        .host-name {
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-primary);
+            margin-bottom: 8px;
+        }
+
+        .host-metrics {
+            display: flex;
+            gap: 8px;
+        }
+
+        .host-metric {
+            flex: 1;
+            text-align: center;
+            padding: 6px;
+            background: var(--bg-primary);
+            border-radius: 6px;
+        }
+
+        .host-metric-value {
+            font-size: 14px;
+            font-weight: 600;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .host-metric-label {
+            font-size: 9px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .metric-ok { color: var(--accent-success); }
+        .metric-warn { color: var(--accent-warning); }
+        .metric-error { color: var(--accent-error); }
     </style>
 </head>
 <body>
@@ -1210,6 +1254,16 @@
             <div class="status-card">
                 <div class="status-card-title">Click to drill down</div>
                 <div id="databases-list"><div class="empty-state">Loading...</div></div>
+            </div>
+        </div>
+
+        <div class="sidebar-section">
+            <div class="section-header">
+                <span class="section-title">Hosts</span>
+            </div>
+            <div class="status-card">
+                <div class="status-card-title">System resources</div>
+                <div id="hosts-list"><div class="empty-state">Loading...</div></div>
             </div>
         </div>
 
@@ -1948,6 +2002,42 @@
                 } else {
                     availableDatabases = [];
                     dbList.innerHTML = '<div class="empty-state" style="color: var(--accent-error);">No database spans!</div>';
+                }
+
+                // Host metrics
+                const hostsList = document.getElementById('hosts-list');
+                if (data.hosts && data.hosts.length > 0) {
+                    hostsList.innerHTML = data.hosts.map(h => {
+                        const cpu = h.cpu_pct !== null ? h.cpu_pct : '-';
+                        const mem = h.memory_pct !== null ? h.memory_pct : '-';
+                        const disk = h.disk_pct !== null ? h.disk_pct : '-';
+
+                        const cpuClass = cpu === '-' ? '' : (cpu > 80 ? 'metric-error' : cpu > 60 ? 'metric-warn' : 'metric-ok');
+                        const memClass = mem === '-' ? '' : (mem > 85 ? 'metric-error' : mem > 70 ? 'metric-warn' : 'metric-ok');
+                        const diskClass = disk === '-' ? '' : (disk > 90 ? 'metric-error' : disk > 75 ? 'metric-warn' : 'metric-ok');
+
+                        return `
+                            <div class="host-item">
+                                <div class="host-name">${escapeHtml(h.host_name)}</div>
+                                <div class="host-metrics">
+                                    <div class="host-metric">
+                                        <div class="host-metric-value ${cpuClass}">${cpu}%</div>
+                                        <div class="host-metric-label">CPU</div>
+                                    </div>
+                                    <div class="host-metric">
+                                        <div class="host-metric-value ${memClass}">${mem}%</div>
+                                        <div class="host-metric-label">MEM</div>
+                                    </div>
+                                    <div class="host-metric">
+                                        <div class="host-metric-value ${diskClass}">${disk}%</div>
+                                        <div class="host-metric-label">DISK</div>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+                } else {
+                    hostsList.innerHTML = '<div class="empty-state">No host metrics</div>';
                 }
 
                 // Error summary card
