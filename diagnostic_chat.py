@@ -503,15 +503,12 @@ ORDER BY time_bucket
 
 ### Example Chart Data Structure
 For latency over time:
-```
-chart_type: "line"
-title: "Checkout Service Latency Over Time"
-labels: ["12:30", "12:31", "12:32", "12:33", ...]
-datasets: [
-  {label: "Avg Latency (ms)", data: [45.2, 52.1, 48.3, ...], color: "#00d9ff"},
-  {label: "Max Latency (ms)", data: [120.5, 165.2, 98.1, ...], color: "#ff5252"}
-]
-```
+- chart_type: "line"
+- title: "Checkout Service Latency Over Time"
+- labels: ["12:30", "12:31", "12:32", "12:33", ...]
+- datasets: array with objects containing label, data, and color fields
+  - First dataset: label="Avg Latency (ms)", data=[45.2, 52.1, 48.3, ...], color="#00d9ff"
+  - Second dataset: label="Max Latency (ms)", data=[120.5, 165.2, 98.1, ...], color="#ff5252"
 
 ## Important Notes
 
