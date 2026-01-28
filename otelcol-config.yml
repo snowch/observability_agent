@@ -176,7 +176,7 @@ processors:
         host.name:
           enabled: true
         host.id:
-          enabled: true
+          enabled: false
         os.type:
           enabled: true
   transform:
