@@ -1714,11 +1714,21 @@
                     );
                     availableServices = sortedServices.map(s => s.service_name);
                     servicesList.innerHTML = sortedServices.map(s => {
+                        const totalSpans = parseInt(s.total_spans) || 0;
                         const errorPct = parseFloat(s.error_pct) || 0;
                         let statusClass = 'status-healthy';
                         let statusText = 'OK';
-                        if (errorPct > 10) { statusClass = 'status-error'; statusText = `${errorPct}% err`; }
-                        else if (errorPct > 1) { statusClass = 'status-warning'; statusText = `${errorPct}% err`; }
+
+                        if (totalSpans === 0) {
+                            statusClass = 'status-warning';
+                            statusText = 'no data';
+                        } else if (errorPct > 10) {
+                            statusClass = 'status-error';
+                            statusText = `${errorPct}% err`;
+                        } else if (errorPct > 1) {
+                            statusClass = 'status-warning';
+                            statusText = `${errorPct}% err`;
+                        }
                         return `
                             <div class="service-item" onclick="openServiceModal('${s.service_name}')">
                                 <span class="service-name">${s.service_name}</span>
@@ -1813,14 +1823,15 @@
                 `<option value="${s}" ${s === serviceName ? 'selected' : ''}>${s}</option>`
             ).join('');
 
-            // Reset auto-refresh toggle state when opening modal
-            modalAutoRefresh = false;
-            document.getElementById('modal-auto-toggle').classList.remove('active');
+            // Enable auto-refresh by default
+            modalAutoRefresh = true;
+            document.getElementById('modal-auto-toggle').classList.add('active');
             const indicator = document.getElementById('modal-auto-indicator');
-            indicator.classList.remove('active');
-            indicator.querySelector('span:last-child').textContent = 'Auto-refresh off';
+            indicator.classList.add('active');
+            indicator.querySelector('span:last-child').textContent = 'Auto-refresh on';
 
             await loadServiceData(serviceName);
+            startModalAutoRefresh();
         }
 
         function switchService(serviceName) {
@@ -1958,14 +1969,15 @@
                 `<option value="${db}" ${db === dbSystem ? 'selected' : ''}>${db}</option>`
             ).join('');
 
-            // Reset auto-refresh toggle state
-            dbModalAutoRefresh = false;
-            document.getElementById('db-modal-auto-toggle').classList.remove('active');
+            // Enable auto-refresh by default
+            dbModalAutoRefresh = true;
+            document.getElementById('db-modal-auto-toggle').classList.add('active');
             const indicator = document.getElementById('db-modal-auto-indicator');
-            indicator.classList.remove('active');
-            indicator.querySelector('span:last-child').textContent = 'Auto-refresh off';
+            indicator.classList.add('active');
+            indicator.querySelector('span:last-child').textContent = 'Auto-refresh on';
 
             await loadDatabaseData(dbSystem);
+            startDbModalAutoRefresh();
         }
 
         function switchDatabase(dbSystem) {

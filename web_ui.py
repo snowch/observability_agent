@@ -337,17 +337,32 @@ def system_status():
         'timestamp': datetime.utcnow().isoformat()
     }
 
-    # Get service health with configurable time window
+    # Get service health - discover from 1 hour, but calculate stats for selected window
+    # This ensures services are always shown even with no recent activity
     service_query = f"""
-    SELECT service_name,
-           COUNT(*) as total_spans,
-           SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) as errors,
-           ROUND(100.0 * SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) as error_pct,
-           ROUND(AVG(duration_ns / 1000000.0), 2) as avg_latency_ms
-    FROM traces_otel_analytic
-    WHERE start_time > NOW() - INTERVAL {interval}
-    GROUP BY service_name
-    ORDER BY total_spans DESC
+    WITH all_services AS (
+        SELECT DISTINCT service_name
+        FROM traces_otel_analytic
+        WHERE start_time > NOW() - INTERVAL '1' HOUR
+    ),
+    recent_stats AS (
+        SELECT service_name,
+               COUNT(*) as total_spans,
+               SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) as errors,
+               ROUND(100.0 * SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) as error_pct,
+               ROUND(AVG(duration_ns / 1000000.0), 2) as avg_latency_ms
+        FROM traces_otel_analytic
+        WHERE start_time > NOW() - INTERVAL {interval}
+        GROUP BY service_name
+    )
+    SELECT a.service_name,
+           COALESCE(r.total_spans, 0) as total_spans,
+           COALESCE(r.errors, 0) as errors,
+           r.error_pct,
+           r.avg_latency_ms
+    FROM all_services a
+    LEFT JOIN recent_stats r ON a.service_name = r.service_name
+    ORDER BY COALESCE(r.total_spans, 0) DESC
     """
     result = executor.execute_query(service_query)
     if result['success']:
