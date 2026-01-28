@@ -284,7 +284,8 @@ def chat_stream():
                             })
 
                         elif content_block.name == "generate_chart":
-                            yield f"data: {json.dumps({'type': 'status', 'message': f'Generating chart: {content_block.input.get(\"title\", \"Chart\")}...', 'step': iteration + 1})}\n\n"
+                            chart_title = content_block.input.get("title", "Chart")
+                            yield f"data: {json.dumps({'type': 'status', 'message': f'Generating chart: {chart_title}...', 'step': iteration + 1})}\n\n"
 
                             chart_data = {
                                 "chart_type": content_block.input.get("chart_type", "line"),
