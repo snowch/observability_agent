@@ -392,95 +392,103 @@ def parse_otlp_logs(message: Dict) -> List[Dict]:
 def parse_otlp_metrics(message: Dict) -> List[Dict]:
     """
     Parse OTLP ExportMetricsServiceRequest to metrics_otel_analytic schema.
-    
+
     OTLP Structure: resourceMetrics[] -> scopeMetrics[] -> metrics[] -> dataPoints[]
     """
     records = []
-    
+
     for resource_metric in message.get("resourceMetrics", []):
         resource = resource_metric.get("resource", {})
         service_name = get_service_name(resource)
-        
+        # Extract resource attributes (includes host.name, host.id, etc.)
+        resource_attrs = attributes_to_dict(resource.get("attributes", []))
+
         for scope_metric in resource_metric.get("scopeMetrics", []):
             for metric in scope_metric.get("metrics", []):
                 metric_name = metric.get("name", "")
                 metric_unit = metric.get("unit", "")
-                
+
                 # Handle Gauge
                 if "gauge" in metric:
                     for dp in metric["gauge"].get("dataPoints", []):
                         records.append(_create_metric_record(
-                            dp, service_name, metric_name, metric_unit
+                            dp, service_name, metric_name, metric_unit, resource_attrs
                         ))
-                
+
                 # Handle Sum
                 elif "sum" in metric:
                     for dp in metric["sum"].get("dataPoints", []):
                         records.append(_create_metric_record(
-                            dp, service_name, metric_name, metric_unit
+                            dp, service_name, metric_name, metric_unit, resource_attrs
                         ))
-                
+
                 # Handle Histogram
                 elif "histogram" in metric:
                     for dp in metric["histogram"].get("dataPoints", []):
                         records.extend(_create_histogram_records(
-                            dp, service_name, metric_name, metric_unit
+                            dp, service_name, metric_name, metric_unit, resource_attrs
                         ))
-                
+
                 # Handle ExponentialHistogram
                 elif "exponentialHistogram" in metric:
                     for dp in metric["exponentialHistogram"].get("dataPoints", []):
                         records.extend(_create_histogram_records(
-                            dp, service_name, metric_name, metric_unit
+                            dp, service_name, metric_name, metric_unit, resource_attrs
                         ))
-                
+
                 # Handle Summary
                 elif "summary" in metric:
                     for dp in metric["summary"].get("dataPoints", []):
                         records.extend(_create_summary_records(
-                            dp, service_name, metric_name, metric_unit
+                            dp, service_name, metric_name, metric_unit, resource_attrs
                         ))
-    
+
     return records
 
 
 def _create_metric_record(
-    dp: Dict, 
-    service_name: str, 
-    metric_name: str, 
-    metric_unit: str
+    dp: Dict,
+    service_name: str,
+    metric_name: str,
+    metric_unit: str,
+    resource_attrs: Dict = None
 ) -> Dict:
     """Create a metric record from a Gauge/Sum data point."""
     dp_attrs = attributes_to_dict(dp.get("attributes", []))
-    
+    # Merge resource attributes with datapoint attributes (dp attrs take precedence)
+    all_attrs = {**(resource_attrs or {}), **dp_attrs}
+
     # Get value - handle string encoding
     value = safe_float(dp.get("asDouble"))
     if value is None:
         value = safe_float(dp.get("asInt"))
     if value is None:
         value = 0.0
-    
+
     return {
         "timestamp": nanos_to_datetime(dp.get("timeUnixNano")),
         "service_name": service_name,
         "metric_name": metric_name,
         "metric_unit": metric_unit,
         "value_double": value,
-        "attributes_flat": attributes_to_flat_string(dp_attrs),
+        "attributes_flat": attributes_to_flat_string(all_attrs),
     }
 
 
 def _create_histogram_records(
-    dp: Dict, 
-    service_name: str, 
-    metric_name: str, 
-    metric_unit: str
+    dp: Dict,
+    service_name: str,
+    metric_name: str,
+    metric_unit: str,
+    resource_attrs: Dict = None
 ) -> List[Dict]:
     """Create metric records from a Histogram data point."""
     records = []
     dp_attrs = attributes_to_dict(dp.get("attributes", []))
+    # Merge resource attributes with datapoint attributes
+    all_attrs = {**(resource_attrs or {}), **dp_attrs}
     timestamp = nanos_to_datetime(dp.get("timeUnixNano"))
-    attrs_flat = attributes_to_flat_string(dp_attrs)
+    attrs_flat = attributes_to_flat_string(all_attrs)
     
     # Count
     count = safe_float(dp.get("count"))
@@ -534,16 +542,19 @@ def _create_histogram_records(
 
 
 def _create_summary_records(
-    dp: Dict, 
-    service_name: str, 
-    metric_name: str, 
-    metric_unit: str
+    dp: Dict,
+    service_name: str,
+    metric_name: str,
+    metric_unit: str,
+    resource_attrs: Dict = None
 ) -> List[Dict]:
     """Create metric records from a Summary data point."""
     records = []
     dp_attrs = attributes_to_dict(dp.get("attributes", []))
+    # Merge resource attributes with datapoint attributes
+    all_attrs = {**(resource_attrs or {}), **dp_attrs}
     timestamp = nanos_to_datetime(dp.get("timeUnixNano"))
-    attrs_flat = attributes_to_flat_string(dp_attrs)
+    attrs_flat = attributes_to_flat_string(all_attrs)
     
     # Count
     count = safe_float(dp.get("count"))
