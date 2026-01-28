@@ -803,6 +803,68 @@
             0%, 100% { opacity: 1; }
             50% { opacity: 0.4; }
         }
+
+        /* Service selector dropdown */
+        .modal-title-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .service-selector {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            color: var(--text-primary);
+            padding: 8px 12px;
+            font-size: 14px;
+            font-family: inherit;
+            cursor: pointer;
+            min-width: 180px;
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23a0a0b0' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            padding-right: 36px;
+            transition: all 0.2s;
+        }
+
+        .service-selector:hover {
+            border-color: var(--accent-primary);
+        }
+
+        .service-selector:focus {
+            outline: none;
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 0 3px rgba(0, 217, 255, 0.1);
+        }
+
+        .service-selector option {
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            padding: 8px;
+        }
+
+        .modal-type-badge {
+            font-size: 10px;
+            font-weight: 600;
+            padding: 4px 10px;
+            border-radius: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .modal-type-badge.service {
+            background: rgba(0, 217, 255, 0.15);
+            color: var(--accent-primary);
+            border: 1px solid rgba(0, 217, 255, 0.3);
+        }
+
+        .modal-type-badge.database {
+            background: rgba(124, 58, 237, 0.15);
+            color: var(--accent-secondary);
+            border: 1px solid rgba(124, 58, 237, 0.3);
+        }
     </style>
 </head>
 <body>
@@ -814,7 +876,7 @@
 
         <div class="sidebar-section">
             <div class="section-header">
-                <span class="section-title">System Status</span>
+                <span class="section-title">Recent Errors</span>
                 <div class="refresh-controls">
                     <div class="toggle-container">
                         <span class="toggle-label">Auto</span>
@@ -823,21 +885,27 @@
                     <button class="refresh-btn" onclick="refreshStatus()">Refresh</button>
                 </div>
             </div>
-            <div class="status-card">
-                <div class="status-card-title">Services (click to drill down)</div>
-                <div id="services-list"><div class="empty-state">Loading...</div></div>
+            <div id="errors-list"><div class="empty-state">Loading...</div></div>
+        </div>
+
+        <div class="sidebar-section">
+            <div class="section-header">
+                <span class="section-title">Services</span>
             </div>
             <div class="status-card">
-                <div class="status-card-title">Databases</div>
-                <div id="databases-list"><div class="empty-state">Loading...</div></div>
+                <div class="status-card-title">Click to drill down</div>
+                <div id="services-list"><div class="empty-state">Loading...</div></div>
             </div>
         </div>
 
         <div class="sidebar-section">
             <div class="section-header">
-                <span class="section-title">Recent Errors</span>
+                <span class="section-title">Databases</span>
             </div>
-            <div id="errors-list"><div class="empty-state">Loading...</div></div>
+            <div class="status-card">
+                <div class="status-card-title">Click to drill down</div>
+                <div id="databases-list"><div class="empty-state">Loading...</div></div>
+            </div>
         </div>
 
         <div class="last-updated">Last updated: <span id="last-updated">-</span></div>
@@ -885,7 +953,12 @@
     <div class="modal-overlay" id="service-modal">
         <div class="modal">
             <div class="modal-header">
-                <h2 id="modal-service-name">Service Details</h2>
+                <div class="modal-title-row">
+                    <span class="modal-type-badge service">Service</span>
+                    <select class="service-selector" id="service-selector" onchange="switchService(this.value)">
+                        <option value="">Loading services...</option>
+                    </select>
+                </div>
                 <div class="modal-refresh-controls">
                     <div class="auto-refresh-indicator" id="modal-auto-indicator">
                         <span class="dot"></span>
@@ -932,6 +1005,62 @@
         </div>
     </div>
 
+    <!-- Database Drill-down Modal -->
+    <div class="modal-overlay" id="database-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title-row">
+                    <span class="modal-type-badge database">Database</span>
+                    <select class="service-selector" id="database-selector" onchange="switchDatabase(this.value)">
+                        <option value="">Loading databases...</option>
+                    </select>
+                </div>
+                <div class="modal-refresh-controls">
+                    <div class="auto-refresh-indicator" id="db-modal-auto-indicator">
+                        <span class="dot"></span>
+                        <span>Auto-refresh off</span>
+                    </div>
+                    <div class="toggle-container">
+                        <span class="toggle-label">Auto</span>
+                        <div class="toggle-switch" id="db-modal-auto-toggle" onclick="toggleDbModalAutoRefresh()"></div>
+                    </div>
+                    <button class="modal-refresh-btn" id="db-modal-refresh-btn" onclick="refreshDatabaseModal()">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+                        </svg>
+                        Refresh
+                    </button>
+                    <button class="modal-close" onclick="closeDatabaseModal()">&times;</button>
+                </div>
+            </div>
+            <div class="modal-body" id="db-modal-body">
+                <div class="chart-row">
+                    <div class="chart-card">
+                        <h4>Query Latency Over Time</h4>
+                        <canvas id="db-latency-chart"></canvas>
+                    </div>
+                    <div class="chart-card">
+                        <h4>Query Volume Over Time</h4>
+                        <canvas id="db-volume-chart"></canvas>
+                    </div>
+                </div>
+                <div class="chart-row">
+                    <div class="chart-card">
+                        <h4>Error Rate Over Time</h4>
+                        <canvas id="db-error-chart"></canvas>
+                    </div>
+                    <div class="chart-card">
+                        <h4>Slowest Queries</h4>
+                        <table class="ops-table" id="db-queries-table">
+                            <thead><tr><th>Service</th><th>Operation</th><th>Avg Latency</th><th>Error %</th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
         const sessionId = 'session_' + Math.random().toString(36).substr(2, 9);
         let isLoading = false;
@@ -944,7 +1073,12 @@
         let modalAutoRefresh = false;
         let modalRefreshInterval = null;
         let currentModalService = null;
-        const REFRESH_INTERVAL = 30000; // 30 seconds
+        let dbModalAutoRefresh = false;
+        let dbModalRefreshInterval = null;
+        let currentModalDatabase = null;
+        let availableServices = [];
+        let availableDatabases = [];
+        const REFRESH_INTERVAL = 15000; // 15 seconds for faster error detection
 
         const chartColors = ['#00d9ff', '#7c3aed', '#10b981', '#f59e0b', '#ef4444', '#ec4899'];
 
@@ -1269,10 +1403,11 @@
 
                 const servicesList = document.getElementById('services-list');
                 if (data.services && data.services.length > 0) {
-                    // Sort services alphabetically by name
+                    // Sort services alphabetically by name and store for dropdown
                     const sortedServices = [...data.services].sort((a, b) =>
                         a.service_name.localeCompare(b.service_name)
                     );
+                    availableServices = sortedServices.map(s => s.service_name);
                     servicesList.innerHTML = sortedServices.map(s => {
                         const errorPct = parseFloat(s.error_pct) || 0;
                         let statusClass = 'status-healthy';
@@ -1287,18 +1422,25 @@
                         `;
                     }).join('');
                 } else {
+                    availableServices = [];
                     servicesList.innerHTML = '<div class="empty-state">No service data</div>';
                 }
 
                 const dbList = document.getElementById('databases-list');
                 if (data.databases && data.databases.length > 0) {
-                    dbList.innerHTML = data.databases.map(db => `
-                        <div class="service-item" style="cursor: default;">
+                    // Sort databases alphabetically and store for dropdown
+                    const sortedDbs = [...data.databases].sort((a, b) =>
+                        a.db_system.localeCompare(b.db_system)
+                    );
+                    availableDatabases = sortedDbs.map(db => db.db_system);
+                    dbList.innerHTML = sortedDbs.map(db => `
+                        <div class="service-item" onclick="openDatabaseModal('${db.db_system}')">
                             <span class="service-name">${db.db_system}</span>
                             <span class="status-badge status-healthy">${db.span_count}</span>
                         </div>
                     `).join('');
                 } else {
+                    availableDatabases = [];
                     dbList.innerHTML = '<div class="empty-state" style="color: var(--accent-error);">No database spans!</div>';
                 }
 
@@ -1323,8 +1465,13 @@
 
         async function openServiceModal(serviceName) {
             currentModalService = serviceName;
-            document.getElementById('modal-service-name').textContent = serviceName;
             document.getElementById('service-modal').classList.add('active');
+
+            // Populate service selector dropdown
+            const selector = document.getElementById('service-selector');
+            selector.innerHTML = availableServices.map(s =>
+                `<option value="${s}" ${s === serviceName ? 'selected' : ''}>${s}</option>`
+            ).join('');
 
             // Reset auto-refresh toggle state when opening modal
             modalAutoRefresh = false;
@@ -1334,6 +1481,13 @@
             indicator.querySelector('span:last-child').textContent = 'Auto-refresh off';
 
             await loadServiceData(serviceName);
+        }
+
+        function switchService(serviceName) {
+            if (serviceName && serviceName !== currentModalService) {
+                currentModalService = serviceName;
+                loadServiceData(serviceName);
+            }
         }
 
         async function loadServiceData(serviceName) {
@@ -1434,12 +1588,180 @@
             modalAutoRefresh = false;
         }
 
+        // Database Modal Functions
+        let dbModalCharts = {};
+
+        async function openDatabaseModal(dbSystem) {
+            currentModalDatabase = dbSystem;
+            document.getElementById('database-modal').classList.add('active');
+
+            // Populate database selector dropdown
+            const selector = document.getElementById('database-selector');
+            selector.innerHTML = availableDatabases.map(db =>
+                `<option value="${db}" ${db === dbSystem ? 'selected' : ''}>${db}</option>`
+            ).join('');
+
+            // Reset auto-refresh toggle state
+            dbModalAutoRefresh = false;
+            document.getElementById('db-modal-auto-toggle').classList.remove('active');
+            const indicator = document.getElementById('db-modal-auto-indicator');
+            indicator.classList.remove('active');
+            indicator.querySelector('span:last-child').textContent = 'Auto-refresh off';
+
+            await loadDatabaseData(dbSystem);
+        }
+
+        function switchDatabase(dbSystem) {
+            if (dbSystem && dbSystem !== currentModalDatabase) {
+                currentModalDatabase = dbSystem;
+                loadDatabaseData(dbSystem);
+            }
+        }
+
+        async function loadDatabaseData(dbSystem) {
+            Object.values(dbModalCharts).forEach(chart => chart.destroy());
+            dbModalCharts = {};
+
+            try {
+                const response = await fetch(`/api/database/${encodeURIComponent(dbSystem)}?range=1`);
+                const data = await response.json();
+
+                // Latency chart
+                if (data.latency_history && data.latency_history.length > 0) {
+                    const labels = data.latency_history.map(r => {
+                        const d = new Date(r.time_bucket);
+                        return d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                    });
+                    dbModalCharts.latency = new Chart(document.getElementById('db-latency-chart'), {
+                        type: 'line',
+                        data: {
+                            labels: labels,
+                            datasets: [
+                                { label: 'Avg Latency (ms)', data: data.latency_history.map(r => r.avg_latency_ms), borderColor: '#7c3aed', tension: 0.4, fill: false, pointRadius: 2 },
+                                { label: 'Max Latency (ms)', data: data.latency_history.map(r => r.max_latency_ms), borderColor: '#ef4444', tension: 0.4, fill: false, pointRadius: 2 }
+                            ]
+                        },
+                        options: chartOptions()
+                    });
+                }
+
+                // Volume chart
+                if (data.latency_history && data.latency_history.length > 0) {
+                    const labels = data.latency_history.map(r => {
+                        const d = new Date(r.time_bucket);
+                        return d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                    });
+                    dbModalCharts.volume = new Chart(document.getElementById('db-volume-chart'), {
+                        type: 'bar',
+                        data: {
+                            labels: labels,
+                            datasets: [
+                                { label: 'Queries', data: data.latency_history.map(r => r.query_count), backgroundColor: 'rgba(124,58,237,0.4)', borderColor: '#7c3aed', borderWidth: 1 }
+                            ]
+                        },
+                        options: chartOptions()
+                    });
+                }
+
+                // Error rate chart
+                if (data.error_history && data.error_history.length > 0) {
+                    const labels = data.error_history.map(r => {
+                        const d = new Date(r.time_bucket);
+                        return d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                    });
+                    dbModalCharts.errors = new Chart(document.getElementById('db-error-chart'), {
+                        type: 'line',
+                        data: {
+                            labels: labels,
+                            datasets: [
+                                { label: 'Error %', data: data.error_history.map(r => r.error_pct), borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.1)', tension: 0.4, fill: true, pointRadius: 2 }
+                            ]
+                        },
+                        options: chartOptions()
+                    });
+                }
+
+                // Slowest queries table
+                const queriesTable = document.getElementById('db-queries-table').querySelector('tbody');
+                if (data.slow_queries && data.slow_queries.length > 0) {
+                    queriesTable.innerHTML = data.slow_queries.map(q => `
+                        <tr>
+                            <td title="${escapeHtml(q.service_name)}">${escapeHtml(q.service_name.substring(0, 20))}</td>
+                            <td title="${escapeHtml(q.span_name)}">${escapeHtml(q.span_name.substring(0, 25))}</td>
+                            <td>${q.avg_latency_ms}ms</td>
+                            <td style="color: ${q.error_pct > 5 ? 'var(--accent-error)' : 'inherit'}">${q.error_pct}%</td>
+                        </tr>
+                    `).join('');
+                } else {
+                    queriesTable.innerHTML = '<tr><td colspan="4" class="empty-state">No data</td></tr>';
+                }
+
+            } catch (error) {
+                console.error('Failed to load database details:', error);
+            }
+        }
+
+        function toggleDbModalAutoRefresh() {
+            dbModalAutoRefresh = !dbModalAutoRefresh;
+            const toggle = document.getElementById('db-modal-auto-toggle');
+            const indicator = document.getElementById('db-modal-auto-indicator');
+
+            toggle.classList.toggle('active', dbModalAutoRefresh);
+            indicator.classList.toggle('active', dbModalAutoRefresh);
+            indicator.querySelector('span:last-child').textContent = dbModalAutoRefresh ? 'Auto-refresh on' : 'Auto-refresh off';
+
+            if (dbModalAutoRefresh && currentModalDatabase) {
+                startDbModalAutoRefresh();
+            } else {
+                stopDbModalAutoRefresh();
+            }
+        }
+
+        function startDbModalAutoRefresh() {
+            if (dbModalRefreshInterval) clearInterval(dbModalRefreshInterval);
+            if (dbModalAutoRefresh && currentModalDatabase) {
+                dbModalRefreshInterval = setInterval(() => refreshDatabaseModal(), REFRESH_INTERVAL);
+            }
+        }
+
+        function stopDbModalAutoRefresh() {
+            if (dbModalRefreshInterval) {
+                clearInterval(dbModalRefreshInterval);
+                dbModalRefreshInterval = null;
+            }
+        }
+
+        async function refreshDatabaseModal() {
+            if (!currentModalDatabase) return;
+
+            const btn = document.getElementById('db-modal-refresh-btn');
+            btn.classList.add('spinning');
+
+            await loadDatabaseData(currentModalDatabase);
+
+            btn.classList.remove('spinning');
+        }
+
+        function closeDatabaseModal() {
+            document.getElementById('database-modal').classList.remove('active');
+            stopDbModalAutoRefresh();
+            currentModalDatabase = null;
+            dbModalAutoRefresh = false;
+        }
+
         document.getElementById('service-modal').addEventListener('click', function(e) {
             if (e.target === this) closeModal();
         });
 
+        document.getElementById('database-modal').addEventListener('click', function(e) {
+            if (e.target === this) closeDatabaseModal();
+        });
+
         document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape') closeModal();
+            if (e.key === 'Escape') {
+                closeModal();
+                closeDatabaseModal();
+            }
         });
     </script>
 </body>

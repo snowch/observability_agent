@@ -469,6 +469,73 @@ def service_details(service_name):
     return jsonify(data)
 
 
+@app.route('/api/database/<db_system>', methods=['GET'])
+def database_details(db_system):
+    """Get detailed metrics for a specific database system."""
+    executor = get_query_executor()
+    time_range = request.args.get('range', '1')  # hours
+
+    data = {
+        'db_system': db_system,
+        'latency_history': [],
+        'error_history': [],
+        'slow_queries': []
+    }
+
+    # Query latency and volume over time (1-minute buckets)
+    latency_query = f"""
+    SELECT
+        date_trunc('minute', start_time) as time_bucket,
+        ROUND(AVG(duration_ns / 1000000.0), 2) as avg_latency_ms,
+        ROUND(MAX(duration_ns / 1000000.0), 2) as max_latency_ms,
+        COUNT(*) as query_count
+    FROM traces_otel_analytic
+    WHERE db_system = '{db_system}'
+      AND start_time > NOW() - INTERVAL '{time_range}' HOUR
+    GROUP BY date_trunc('minute', start_time)
+    ORDER BY time_bucket
+    """
+    result = executor.execute_query(latency_query)
+    if result['success']:
+        data['latency_history'] = result['rows']
+
+    # Error rate over time
+    error_query = f"""
+    SELECT
+        date_trunc('minute', start_time) as time_bucket,
+        COUNT(*) as total,
+        SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) as errors,
+        ROUND(100.0 * SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) as error_pct
+    FROM traces_otel_analytic
+    WHERE db_system = '{db_system}'
+      AND start_time > NOW() - INTERVAL '{time_range}' HOUR
+    GROUP BY date_trunc('minute', start_time)
+    ORDER BY time_bucket
+    """
+    result = executor.execute_query(error_query)
+    if result['success']:
+        data['error_history'] = result['rows']
+
+    # Slowest queries by service/operation
+    slow_queries_query = f"""
+    SELECT service_name, span_name,
+           COUNT(*) as call_count,
+           ROUND(AVG(duration_ns / 1000000.0), 2) as avg_latency_ms,
+           ROUND(100.0 * SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) as error_pct
+    FROM traces_otel_analytic
+    WHERE db_system = '{db_system}'
+      AND start_time > NOW() - INTERVAL '{time_range}' HOUR
+    GROUP BY service_name, span_name
+    ORDER BY avg_latency_ms DESC
+    LIMIT 10
+    """
+    result = executor.execute_query(slow_queries_query)
+    if result['success']:
+        data['slow_queries'] = result['rows']
+
+    return jsonify(data)
+
+
 # =============================================================================
 # Main
 # =============================================================================
