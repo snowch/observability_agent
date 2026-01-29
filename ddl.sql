@@ -1,3 +1,16 @@
+-- =============================================================================
+-- Drop Existing Tables (Fresh Install)
+-- =============================================================================
+DROP TABLE IF EXISTS vast."csnow-db|otel".logs_otel_analytic;
+DROP TABLE IF EXISTS vast."csnow-db|otel".metrics_otel_analytic;
+DROP TABLE IF EXISTS vast."csnow-db|otel".span_events_otel_analytic;
+DROP TABLE IF EXISTS vast."csnow-db|otel".span_links_otel_analytic;
+DROP TABLE IF EXISTS vast."csnow-db|otel".traces_otel_analytic;
+DROP TABLE IF EXISTS vast."csnow-db|otel".service_baselines;
+DROP TABLE IF EXISTS vast."csnow-db|otel".anomaly_scores;
+DROP TABLE IF EXISTS vast."csnow-db|otel".alerts;
+DROP TABLE IF EXISTS vast."csnow-db|otel".alert_investigations;
+
 -- vast."csnow-db|otel".logs_otel_analytic definition
 
 CREATE TABLE vast."csnow-db|otel".logs_otel_analytic (
