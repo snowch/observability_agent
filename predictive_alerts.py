@@ -204,8 +204,11 @@ class TrinoExecutor:
         )
         print(f"[Trino] Connected to {self.config.trino_host}")
 
-    def execute(self, sql: str) -> List[Dict[str, Any]]:
-        """Execute a query and return results as list of dicts."""
+    def execute(self, sql: str, return_error: bool = False) -> List[Dict[str, Any]]:
+        """Execute a query and return results as list of dicts.
+
+        If return_error=True, returns [{"error": "message"}] on failure instead of [].
+        """
         try:
             cursor = self._conn.cursor()
             cursor.execute(sql)
@@ -216,10 +219,13 @@ class TrinoExecutor:
                 return [dict(zip(columns, row)) for row in rows]
             return []
         except Exception as e:
-            print(f"[Trino] Query error: {e}")
+            error_msg = str(e)
+            print(f"[Trino] Query error: {error_msg}")
             # Try to reconnect on connection errors
-            if "connection" in str(e).lower():
+            if "connection" in error_msg.lower():
                 self._connect()
+            if return_error:
+                return [{"error": error_msg}]
             return []
 
     def execute_write(self, sql: str) -> bool:
@@ -845,11 +851,17 @@ class AlertManager:
 INVESTIGATION_SYSTEM_PROMPT = """You are an expert SRE assistant performing automated root cause analysis for alerts.
 You have access to observability data via SQL queries. Analyze the alert and determine the root cause.
 
-Available tables:
-- traces_otel_analytic: Distributed traces with service_name, span_name, status_code, duration_ns, db_system
-- logs_otel_analytic: Application logs with service_name, severity_text, body_text
-- span_events_otel_analytic: Span events including exceptions with exception_type, exception_message
-- metrics_otel_analytic: Time-series metrics with metric_name, value_double
+Available tables and their key columns:
+- traces_otel_analytic: start_time (timestamp), trace_id, span_id, parent_span_id, service_name, span_name, span_kind, status_code, http_status, duration_ns, db_system
+- logs_otel_analytic: timestamp, service_name, severity_number, severity_text, body_text, trace_id, span_id
+- span_events_otel_analytic: timestamp, trace_id, span_id, service_name, span_name, event_name, exception_type, exception_message, exception_stacktrace
+- metrics_otel_analytic: timestamp, service_name, metric_name, metric_unit, value_double
+
+IMPORTANT SQL SYNTAX:
+- Time filtering: WHERE start_time > current_timestamp - INTERVAL '15' MINUTE
+- DO NOT use 'timestamp' column for traces_otel_analytic - use 'start_time'
+- Interval syntax: INTERVAL '15' MINUTE (not INTERVAL without quotes)
+- DO NOT end queries with semicolons
 
 Your analysis should be CONCISE (under 500 words). Focus on:
 1. What is the root cause?
@@ -1002,8 +1014,8 @@ Start by checking for errors, exceptions, and anomalies in this service and its 
                         sql = sql.strip().rstrip(';')
                         queries_executed += 1
 
-                        # Execute query
-                        result = self.executor.execute(sql)
+                        # Execute query with error reporting
+                        result = self.executor.execute(sql, return_error=True)
                         result_str = json.dumps(result[:20] if len(result) > 20 else result, default=str)
 
                         tool_results.append({
@@ -1011,16 +1023,24 @@ Start by checking for errors, exceptions, and anomalies in this service and its 
                             "tool_use_id": tool_call.id,
                             "content": result_str
                         })
+                    else:
+                        # Unknown tool - still need to respond
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_call.id,
+                            "content": "Unknown tool",
+                            "is_error": True
+                        })
 
                 messages.append({"role": "user", "content": tool_results})
 
-            # Add the assistant's last response to messages
-            messages.append({"role": "assistant", "content": response.content})
-
-            # Request final structured summary
-            messages.append({
-                "role": "user",
-                "content": """Based on your investigation, provide your final analysis in this EXACT format:
+            # Handle the conversation state before requesting final summary
+            if response.stop_reason == "end_turn":
+                # Last response was natural completion, add it and request summary
+                messages.append({"role": "assistant", "content": response.content})
+                messages.append({
+                    "role": "user",
+                    "content": """Based on your investigation, provide your final analysis in this EXACT format:
 
 ROOT CAUSE: <one sentence describing the root cause>
 
@@ -1031,7 +1051,33 @@ EVIDENCE:
 RECOMMENDED ACTIONS:
 1. <action 1>
 2. <action 2>"""
-            })
+                })
+            else:
+                # Last response had tool calls - need to get a natural completion first
+                # The tool_results are already in messages, so just request completion
+                summary_response = self.client.messages.create(
+                    model=self.config.investigation_model,
+                    max_tokens=self.config.investigation_max_tokens,
+                    system=INVESTIGATION_SYSTEM_PROMPT,
+                    tools=self.tools,
+                    messages=messages
+                )
+                total_tokens += summary_response.usage.input_tokens + summary_response.usage.output_tokens
+                messages.append({"role": "assistant", "content": summary_response.content})
+                messages.append({
+                    "role": "user",
+                    "content": """Based on your investigation, provide your final analysis in this EXACT format:
+
+ROOT CAUSE: <one sentence describing the root cause>
+
+EVIDENCE:
+- <finding 1>
+- <finding 2>
+
+RECOMMENDED ACTIONS:
+1. <action 1>
+2. <action 2>"""
+                })
 
             # Get structured response (no tools)
             final_response = self.client.messages.create(
