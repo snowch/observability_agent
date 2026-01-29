@@ -197,6 +197,114 @@
             border: 1px solid rgba(239, 68, 68, 0.3);
         }
 
+        /* Alerts Styling */
+        .alerts-badge {
+            background: var(--accent-error);
+            color: white;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-left: 8px;
+            animation: pulse-badge 2s infinite;
+        }
+
+        @keyframes pulse-badge {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        .alerts-list {
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .alert-item {
+            padding: 10px 12px;
+            margin-bottom: 8px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .alert-item:hover {
+            transform: translateX(2px);
+        }
+
+        .alert-critical {
+            background: rgba(239, 68, 68, 0.12);
+            border-left: 3px solid var(--accent-error);
+        }
+
+        .alert-warning {
+            background: rgba(245, 158, 11, 0.12);
+            border-left: 3px solid var(--accent-warning);
+        }
+
+        .alert-info {
+            background: rgba(0, 217, 255, 0.12);
+            border-left: 3px solid var(--accent-primary);
+        }
+
+        .alert-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 4px;
+        }
+
+        .alert-severity {
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .alert-severity.critical { color: var(--accent-error); }
+        .alert-severity.warning { color: var(--accent-warning); }
+        .alert-severity.info { color: var(--accent-primary); }
+
+        .alert-time {
+            font-size: 10px;
+            color: var(--text-muted);
+        }
+
+        .alert-title {
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-primary);
+            margin-bottom: 2px;
+        }
+
+        .alert-description {
+            font-size: 11px;
+            color: var(--text-secondary);
+            line-height: 1.4;
+        }
+
+        .alert-summary {
+            display: flex;
+            gap: 12px;
+            padding: 8px 12px;
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            margin-bottom: 8px;
+        }
+
+        .alert-summary-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+        }
+
+        .alert-summary-count {
+            font-weight: 600;
+        }
+
+        .alert-summary-count.critical { color: var(--accent-error); }
+        .alert-summary-count.warning { color: var(--accent-warning); }
+
         .error-item {
             padding: 12px;
             background: rgba(239, 68, 68, 0.08);
@@ -1841,6 +1949,16 @@
 
         <div class="sidebar-section">
             <div class="section-header">
+                <span class="section-title">Predictive Alerts</span>
+                <span id="alerts-badge" class="alerts-badge" style="display: none;">0</span>
+            </div>
+            <div id="alerts-list" class="alerts-list">
+                <div class="empty-state">Loading...</div>
+            </div>
+        </div>
+
+        <div class="sidebar-section">
+            <div class="section-header">
                 <span class="section-title">Services</span>
                 <select class="time-selector" id="services-time-selector" onchange="refreshStatus()">
                     <option value="1m">1m</option>
@@ -3138,9 +3256,89 @@
 
                 document.getElementById('last-updated').textContent = new Date().toLocaleTimeString();
 
+                // Also refresh alerts
+                await refreshAlerts();
+
             } catch (error) {
                 console.error('Failed to refresh status:', error);
             }
+        }
+
+        async function refreshAlerts() {
+            try {
+                const response = await fetch('/api/alerts?status=active&limit=10');
+                const data = await response.json();
+
+                const alertsList = document.getElementById('alerts-list');
+                const alertsBadge = document.getElementById('alerts-badge');
+
+                // Update badge
+                const totalActive = data.summary?.active || 0;
+                if (totalActive > 0) {
+                    alertsBadge.textContent = totalActive;
+                    alertsBadge.style.display = 'inline';
+
+                    // Change badge color based on severity
+                    if (data.summary.critical > 0) {
+                        alertsBadge.style.background = 'var(--accent-error)';
+                    } else if (data.summary.warning > 0) {
+                        alertsBadge.style.background = 'var(--accent-warning)';
+                    } else {
+                        alertsBadge.style.background = 'var(--accent-primary)';
+                    }
+                } else {
+                    alertsBadge.style.display = 'none';
+                }
+
+                // Update alerts list
+                if (data.alerts && data.alerts.length > 0) {
+                    alertsList.innerHTML = data.alerts.map(alert => {
+                        const severity = alert.severity || 'info';
+                        const timeAgo = formatTimeAgo(alert.created_at);
+
+                        return `
+                            <div class="alert-item alert-${severity}" onclick="investigateAlert('${escapeHtml(alert.service_name)}', '${escapeHtml(alert.alert_type)}')">
+                                <div class="alert-header">
+                                    <span class="alert-severity ${severity}">${severity}</span>
+                                    <span class="alert-time">${timeAgo}</span>
+                                </div>
+                                <div class="alert-title">${escapeHtml(alert.title || alert.alert_type)}</div>
+                                <div class="alert-description">${escapeHtml(alert.description || '')}</div>
+                            </div>
+                        `;
+                    }).join('');
+                } else {
+                    alertsList.innerHTML = `
+                        <div class="empty-state" style="color: var(--accent-success);">
+                            No active alerts
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('Failed to refresh alerts:', error);
+                document.getElementById('alerts-list').innerHTML = '<div class="empty-state">Alerts unavailable</div>';
+            }
+        }
+
+        function formatTimeAgo(isoString) {
+            if (!isoString) return '';
+            const date = new Date(isoString);
+            const now = new Date();
+            const diffMs = now - date;
+            const diffMins = Math.floor(diffMs / 60000);
+
+            if (diffMins < 1) return 'just now';
+            if (diffMins < 60) return `${diffMins}m ago`;
+            const diffHours = Math.floor(diffMins / 60);
+            if (diffHours < 24) return `${diffHours}h ago`;
+            return `${Math.floor(diffHours / 24)}d ago`;
+        }
+
+        function investigateAlert(serviceName, alertType) {
+            // Set a prompt to investigate the alert
+            const prompt = `Investigate the ${alertType.replace(/_/g, ' ')} alert for ${serviceName}. What's causing this issue?`;
+            setPrompt(prompt);
+            sendMessage();
         }
 
         async function openServiceModal(serviceName) {

@@ -71,3 +71,58 @@ CREATE TABLE vast."csnow-db|otel".traces_otel_analytic (
    db_system varchar
 );
 
+-- =============================================================================
+-- Predictive Maintenance Tables
+-- =============================================================================
+
+-- Service baselines: stores computed statistical baselines per service/metric
+CREATE TABLE vast."csnow-db|otel".service_baselines (
+   computed_at timestamp(9),
+   service_name varchar,
+   metric_type varchar,           -- 'error_rate', 'latency_p50', 'latency_p95', 'latency_p99', 'throughput'
+   baseline_mean double,
+   baseline_stddev double,
+   baseline_min double,
+   baseline_max double,
+   baseline_p50 double,
+   baseline_p95 double,
+   baseline_p99 double,
+   sample_count bigint,
+   window_hours integer           -- how many hours of data used to compute baseline
+);
+
+-- Anomaly scores: stores ML model predictions and anomaly detection results
+CREATE TABLE vast."csnow-db|otel".anomaly_scores (
+   timestamp timestamp(9),
+   service_name varchar,
+   metric_type varchar,
+   current_value double,
+   expected_value double,
+   baseline_mean double,
+   baseline_stddev double,
+   z_score double,
+   anomaly_score double,          -- 0.0 to 1.0, higher = more anomalous
+   is_anomaly boolean,
+   detection_method varchar       -- 'zscore', 'isolation_forest', 'trend', 'threshold'
+);
+
+-- Alerts: stores generated alerts with severity and status
+CREATE TABLE vast."csnow-db|otel".alerts (
+   alert_id varchar,
+   created_at timestamp(9),
+   updated_at timestamp(9),
+   service_name varchar,
+   alert_type varchar,            -- 'error_spike', 'latency_degradation', 'throughput_drop', 'anomaly', 'trend'
+   severity varchar,              -- 'info', 'warning', 'critical'
+   title varchar,
+   description varchar,
+   metric_type varchar,
+   current_value double,
+   threshold_value double,
+   baseline_value double,
+   z_score double,
+   status varchar,                -- 'active', 'acknowledged', 'resolved'
+   resolved_at timestamp(9),
+   auto_resolved boolean
+);
+
