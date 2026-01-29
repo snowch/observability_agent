@@ -1258,6 +1258,302 @@ def host_services(host_name):
 
 
 # =============================================================================
+# Alerts API
+# =============================================================================
+
+@app.route('/api/alerts', methods=['GET'])
+def get_alerts():
+    """Get alerts with optional filtering."""
+    executor = get_query_executor()
+
+    status = request.args.get('status', 'active')  # active, resolved, all
+    severity = request.args.get('severity')  # info, warning, critical
+    service = request.args.get('service')
+    limit = min(int(request.args.get('limit', 50)), 100)
+
+    data = {
+        'alerts': [],
+        'summary': {
+            'active': 0,
+            'critical': 0,
+            'warning': 0,
+            'info': 0
+        }
+    }
+
+    # Build query with filters
+    conditions = []
+
+    if status == 'active':
+        conditions.append("status = 'active'")
+    elif status == 'resolved':
+        conditions.append("status = 'resolved'")
+    # 'all' has no status filter
+
+    if severity:
+        conditions.append(f"severity = '{severity}'")
+
+    if service:
+        conditions.append(f"service_name = '{service}'")
+
+    where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+
+    # Get alerts
+    alerts_query = f"""
+    SELECT
+        alert_id,
+        created_at,
+        updated_at,
+        service_name,
+        alert_type,
+        severity,
+        title,
+        description,
+        metric_type,
+        current_value,
+        baseline_value,
+        z_score,
+        status,
+        resolved_at,
+        auto_resolved
+    FROM alerts
+    {where_clause}
+    ORDER BY
+        CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
+        created_at DESC
+    LIMIT {limit}
+    """
+
+    result = executor.execute_query(alerts_query)
+    if result['success']:
+        data['alerts'] = result['rows']
+
+    # Get summary counts
+    summary_query = """
+    SELECT
+        SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active,
+        SUM(CASE WHEN status = 'active' AND severity = 'critical' THEN 1 ELSE 0 END) as critical,
+        SUM(CASE WHEN status = 'active' AND severity = 'warning' THEN 1 ELSE 0 END) as warning,
+        SUM(CASE WHEN status = 'active' AND severity = 'info' THEN 1 ELSE 0 END) as info
+    FROM alerts
+    """
+    result = executor.execute_query(summary_query)
+    if result['success'] and result['rows']:
+        row = result['rows'][0]
+        data['summary'] = {
+            'active': row.get('active') or 0,
+            'critical': row.get('critical') or 0,
+            'warning': row.get('warning') or 0,
+            'info': row.get('info') or 0
+        }
+
+    return jsonify(data)
+
+
+@app.route('/api/alerts/<alert_id>/acknowledge', methods=['POST'])
+def acknowledge_alert(alert_id):
+    """Acknowledge an alert."""
+    executor = get_query_executor()
+
+    sql = f"""
+    UPDATE alerts
+    SET status = 'acknowledged',
+        updated_at = NOW()
+    WHERE alert_id = '{alert_id}'
+    """
+
+    try:
+        cursor = executor.conn.cursor()
+        cursor.execute(sql)
+        return jsonify({'success': True, 'message': f'Alert {alert_id} acknowledged'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/alerts/<alert_id>/resolve', methods=['POST'])
+def resolve_alert(alert_id):
+    """Manually resolve an alert."""
+    executor = get_query_executor()
+
+    sql = f"""
+    UPDATE alerts
+    SET status = 'resolved',
+        resolved_at = NOW(),
+        updated_at = NOW(),
+        auto_resolved = false
+    WHERE alert_id = '{alert_id}'
+    """
+
+    try:
+        cursor = executor.conn.cursor()
+        cursor.execute(sql)
+        return jsonify({'success': True, 'message': f'Alert {alert_id} resolved'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/alerts/history', methods=['GET'])
+def get_alert_history():
+    """Get historical alert data for trend analysis."""
+    executor = get_query_executor()
+
+    hours = min(int(request.args.get('hours', 24)), 168)  # max 1 week
+
+    data = {
+        'hourly_counts': [],
+        'by_service': [],
+        'by_type': []
+    }
+
+    # Hourly alert counts
+    hourly_query = f"""
+    SELECT
+        date_trunc('hour', created_at) as hour,
+        COUNT(*) as total,
+        SUM(CASE WHEN severity = 'critical' THEN 1 ELSE 0 END) as critical,
+        SUM(CASE WHEN severity = 'warning' THEN 1 ELSE 0 END) as warning
+    FROM alerts
+    WHERE created_at > NOW() - INTERVAL '{hours}' HOUR
+    GROUP BY date_trunc('hour', created_at)
+    ORDER BY hour
+    """
+    result = executor.execute_query(hourly_query)
+    if result['success']:
+        data['hourly_counts'] = result['rows']
+
+    # Alerts by service
+    by_service_query = f"""
+    SELECT
+        service_name,
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active
+    FROM alerts
+    WHERE created_at > NOW() - INTERVAL '{hours}' HOUR
+    GROUP BY service_name
+    ORDER BY total DESC
+    LIMIT 10
+    """
+    result = executor.execute_query(by_service_query)
+    if result['success']:
+        data['by_service'] = result['rows']
+
+    # Alerts by type
+    by_type_query = f"""
+    SELECT
+        alert_type,
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active
+    FROM alerts
+    WHERE created_at > NOW() - INTERVAL '{hours}' HOUR
+    GROUP BY alert_type
+    ORDER BY total DESC
+    """
+    result = executor.execute_query(by_type_query)
+    if result['success']:
+        data['by_type'] = result['rows']
+
+    return jsonify(data)
+
+
+@app.route('/api/baselines', methods=['GET'])
+def get_baselines():
+    """Get current baselines for monitoring."""
+    executor = get_query_executor()
+
+    service = request.args.get('service')
+
+    data = {
+        'baselines': []
+    }
+
+    conditions = ["1=1"]
+    if service:
+        conditions.append(f"service_name = '{service}'")
+
+    where_clause = " AND ".join(conditions)
+
+    # Get latest baselines for each service/metric combination
+    baselines_query = f"""
+    SELECT
+        b.service_name,
+        b.metric_type,
+        b.baseline_mean,
+        b.baseline_stddev,
+        b.baseline_p50,
+        b.baseline_p95,
+        b.baseline_p99,
+        b.sample_count,
+        b.window_hours,
+        b.computed_at
+    FROM service_baselines b
+    INNER JOIN (
+        SELECT service_name, metric_type, MAX(computed_at) as max_computed
+        FROM service_baselines
+        WHERE {where_clause}
+        GROUP BY service_name, metric_type
+    ) latest ON b.service_name = latest.service_name
+        AND b.metric_type = latest.metric_type
+        AND b.computed_at = latest.max_computed
+    ORDER BY b.service_name, b.metric_type
+    """
+
+    result = executor.execute_query(baselines_query)
+    if result['success']:
+        data['baselines'] = result['rows']
+
+    return jsonify(data)
+
+
+@app.route('/api/anomalies', methods=['GET'])
+def get_anomalies():
+    """Get recent anomaly scores."""
+    executor = get_query_executor()
+
+    minutes = min(int(request.args.get('minutes', 60)), 1440)  # max 24 hours
+    service = request.args.get('service')
+    only_anomalies = request.args.get('only_anomalies', 'true').lower() == 'true'
+
+    data = {
+        'anomalies': []
+    }
+
+    conditions = [f"timestamp > NOW() - INTERVAL '{minutes}' MINUTE"]
+
+    if service:
+        conditions.append(f"service_name = '{service}'")
+
+    if only_anomalies:
+        conditions.append("is_anomaly = true")
+
+    where_clause = " AND ".join(conditions)
+
+    anomalies_query = f"""
+    SELECT
+        timestamp,
+        service_name,
+        metric_type,
+        current_value,
+        expected_value,
+        baseline_mean,
+        baseline_stddev,
+        z_score,
+        anomaly_score,
+        is_anomaly,
+        detection_method
+    FROM anomaly_scores
+    WHERE {where_clause}
+    ORDER BY timestamp DESC
+    LIMIT 100
+    """
+
+    result = executor.execute_query(anomalies_query)
+    if result['success']:
+        data['anomalies'] = result['rows']
+
+    return jsonify(data)
+
+
+# =============================================================================
 # Main
 # =============================================================================
 
