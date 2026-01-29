@@ -127,6 +127,29 @@ class Config:
         default_factory=lambda: int(os.getenv("AUTO_RESOLVE_MINUTES", "30"))
     )
 
+    # Root cause detection settings (flexible/learnable)
+    root_cause_enabled: bool = field(
+        default_factory=lambda: os.getenv("ROOT_CAUSE_ENABLED", "true").lower() == "true"
+    )
+    # Comma-separated list of root cause types to enable (empty = all enabled)
+    # Options: db_latency, db_error, dependency_latency, dependency_error, exception_surge, new_exception
+    root_cause_types: str = field(
+        default_factory=lambda: os.getenv("ROOT_CAUSE_TYPES", "")
+    )
+    # Per-type threshold multipliers (relative to base zscore_threshold)
+    # Format: "db_latency:0.8,db_error:0.6,dependency:1.0,exception:1.2"
+    root_cause_threshold_multipliers: str = field(
+        default_factory=lambda: os.getenv("ROOT_CAUSE_THRESHOLDS", "db_error:0.8,dependency_error:0.9")
+    )
+    # Adaptive learning: adjust thresholds based on alert resolution patterns
+    adaptive_thresholds_enabled: bool = field(
+        default_factory=lambda: os.getenv("ADAPTIVE_THRESHOLDS", "true").lower() == "true"
+    )
+    # How much to adjust threshold when alerts are frequently auto-resolved (likely false positives)
+    adaptive_threshold_adjustment: float = field(
+        default_factory=lambda: float(os.getenv("ADAPTIVE_THRESHOLD_ADJUSTMENT", "0.1"))
+    )
+
     # LLM Investigation settings
     anthropic_api_key: str = field(
         default_factory=lambda: os.getenv("ANTHROPIC_API_KEY")
@@ -181,6 +204,180 @@ class AlertStatus(Enum):
     ACTIVE = "active"
     ACKNOWLEDGED = "acknowledged"
     RESOLVED = "resolved"
+
+
+# =============================================================================
+# Adaptive Threshold Manager
+# =============================================================================
+
+class AdaptiveThresholdManager:
+    """
+    Manages learned thresholds that adapt based on alert patterns.
+
+    Learning logic:
+    - If alerts for a metric type are frequently auto-resolved quickly -> increase threshold (reduce sensitivity)
+    - If alerts lead to investigations with confirmed root causes -> decrease threshold (increase sensitivity)
+    """
+
+    def __init__(self, config: Config):
+        self.config = config
+        self.base_threshold = config.zscore_threshold
+
+        # Parse configured threshold multipliers
+        self.multipliers: Dict[str, float] = self._parse_multipliers(config.root_cause_threshold_multipliers)
+
+        # Learned adjustments (loaded from DB, modified over time)
+        self.learned_adjustments: Dict[str, float] = {}
+
+        # Parse enabled root cause types
+        self.enabled_types: set = self._parse_enabled_types(config.root_cause_types)
+
+    def _parse_multipliers(self, multiplier_str: str) -> Dict[str, float]:
+        """Parse threshold multipliers from config string."""
+        multipliers = {}
+        if not multiplier_str:
+            return multipliers
+
+        for pair in multiplier_str.split(","):
+            if ":" in pair:
+                key, value = pair.strip().split(":", 1)
+                try:
+                    multipliers[key.strip()] = float(value.strip())
+                except ValueError:
+                    pass
+        return multipliers
+
+    def _parse_enabled_types(self, types_str: str) -> set:
+        """Parse enabled root cause types from config string."""
+        if not types_str:
+            return set()  # Empty means all enabled
+        return {t.strip() for t in types_str.split(",") if t.strip()}
+
+    def is_root_cause_enabled(self, root_cause_type: str) -> bool:
+        """Check if a specific root cause type is enabled."""
+        if not self.config.root_cause_enabled:
+            return False
+        if not self.enabled_types:
+            return True  # Empty set means all enabled
+        return root_cause_type in self.enabled_types
+
+    def get_threshold(self, metric_category: str) -> float:
+        """
+        Get the effective threshold for a metric category.
+
+        Categories: db_latency, db_error, dependency_latency, dependency_error, exception_surge, new_exception
+        """
+        # Start with base threshold
+        threshold = self.base_threshold
+
+        # Apply configured multiplier if exists
+        if metric_category in self.multipliers:
+            threshold *= self.multipliers[metric_category]
+        # Also check partial matches (e.g., "db" matches "db_latency")
+        else:
+            for key, mult in self.multipliers.items():
+                if metric_category.startswith(key) or key in metric_category:
+                    threshold *= mult
+                    break
+
+        # Apply learned adjustment
+        if self.config.adaptive_thresholds_enabled and metric_category in self.learned_adjustments:
+            threshold += self.learned_adjustments[metric_category]
+
+        return max(1.0, threshold)  # Never go below 1.0
+
+    def learn_from_alert_history(self, executor: 'TrinoExecutor'):
+        """
+        Analyze alert history to adjust thresholds.
+
+        - High auto-resolve rate + short duration -> likely false positives -> increase threshold
+        - Alerts with investigations showing confirmed issues -> keep or lower threshold
+        """
+        if not self.config.adaptive_thresholds_enabled:
+            return
+
+        # Analyze alerts from last 7 days
+        sql = """
+            SELECT
+                alert_type,
+                metric_type,
+                COUNT(*) as total_alerts,
+                SUM(CASE WHEN auto_resolved = true THEN 1 ELSE 0 END) as auto_resolved_count,
+                AVG(CASE
+                    WHEN resolved_at IS NOT NULL AND created_at IS NOT NULL
+                    THEN CAST(resolved_at AS DOUBLE) - CAST(created_at AS DOUBLE)
+                    ELSE NULL
+                END) as avg_resolution_time_ns
+            FROM alerts
+            WHERE created_at > current_timestamp - interval '7' day
+            GROUP BY alert_type, metric_type
+            HAVING COUNT(*) >= 5
+        """
+        results = executor.execute(sql)
+
+        for row in results:
+            alert_type = row.get("alert_type", "")
+            metric_type = row.get("metric_type", "")
+            total = row.get("total_alerts", 0)
+            auto_resolved = row.get("auto_resolved_count", 0)
+
+            if total < 5:
+                continue
+
+            auto_resolve_rate = auto_resolved / total if total > 0 else 0
+
+            # Determine the metric category
+            category = self._get_metric_category(alert_type, metric_type)
+            if not category:
+                continue
+
+            # High auto-resolve rate (>70%) suggests false positives - increase threshold
+            if auto_resolve_rate > 0.7:
+                adjustment = self.config.adaptive_threshold_adjustment
+                self.learned_adjustments[category] = self.learned_adjustments.get(category, 0) + adjustment
+                print(f"[Adaptive] Increasing threshold for {category} (auto-resolve rate: {auto_resolve_rate:.0%})")
+
+            # Low auto-resolve rate (<30%) with many alerts - might be too sensitive
+            elif auto_resolve_rate < 0.3 and total > 20:
+                # Check if these led to investigations with findings
+                inv_sql = f"""
+                    SELECT COUNT(*) as investigated
+                    FROM alert_investigations
+                    WHERE alert_type = '{alert_type}'
+                    AND investigated_at > current_timestamp - interval '7' day
+                    AND root_cause_summary IS NOT NULL AND root_cause_summary != ''
+                """
+                inv_result = executor.execute(inv_sql)
+                investigated = inv_result[0].get("investigated", 0) if inv_result else 0
+
+                # If most alerts weren't investigated or had findings, they're valuable
+                if investigated > total * 0.3:
+                    # Keep threshold as is or slightly lower
+                    adjustment = -self.config.adaptive_threshold_adjustment * 0.5
+                    self.learned_adjustments[category] = self.learned_adjustments.get(category, 0) + adjustment
+                    print(f"[Adaptive] Decreasing threshold for {category} (valuable alerts)")
+
+        # Cap adjustments to prevent runaway
+        for category in self.learned_adjustments:
+            self.learned_adjustments[category] = max(-1.0, min(1.0, self.learned_adjustments[category]))
+
+    def _get_metric_category(self, alert_type: str, metric_type: str) -> str:
+        """Map alert/metric type to a threshold category."""
+        if "db_" in alert_type.lower() or metric_type.startswith("db_"):
+            if "latency" in metric_type.lower():
+                return "db_latency"
+            elif "error" in metric_type.lower():
+                return "db_error"
+        elif "dependency" in alert_type.lower() or metric_type.startswith("dep_"):
+            if "latency" in metric_type.lower():
+                return "dependency_latency"
+            elif "error" in metric_type.lower() or "rate" in metric_type.lower():
+                return "dependency_error"
+        elif "exception" in alert_type.lower():
+            if "new_exception" in alert_type.lower():
+                return "new_exception"
+            return "exception_surge"
+        return ""
 
 
 # =============================================================================
@@ -653,6 +850,9 @@ class AnomalyDetector:
         self.config = config
         self.baseline_computer = baseline_computer
 
+        # Adaptive threshold manager for root cause detection
+        self.threshold_manager = AdaptiveThresholdManager(config)
+
         # Isolation Forest model (if sklearn available)
         self.isolation_forest = None
         if SKLEARN_AVAILABLE:
@@ -661,6 +861,10 @@ class AnomalyDetector:
                 random_state=42,
                 n_estimators=100
             )
+
+    def learn_thresholds(self):
+        """Learn adaptive thresholds from alert history."""
+        self.threshold_manager.learn_from_alert_history(self.executor)
 
     def detect_all(self) -> List[Dict]:
         """Run all anomaly detection methods and return detected anomalies."""
@@ -692,19 +896,25 @@ class AnomalyDetector:
             if down_anomaly:
                 anomalies.append(down_anomaly)
 
-            # === ROOT CAUSE DETECTION (new) ===
+            # === ROOT CAUSE DETECTION (new - configurable) ===
+            if self.config.root_cause_enabled:
+                # Check database health issues
+                if self.threshold_manager.is_root_cause_enabled("db_latency") or \
+                   self.threshold_manager.is_root_cause_enabled("db_error"):
+                    db_anomalies = self._detect_database_issues(service)
+                    anomalies.extend(db_anomalies)
 
-            # Check database health issues
-            db_anomalies = self._detect_database_issues(service)
-            anomalies.extend(db_anomalies)
+                # Check dependency health issues
+                if self.threshold_manager.is_root_cause_enabled("dependency_latency") or \
+                   self.threshold_manager.is_root_cause_enabled("dependency_error"):
+                    dep_anomalies = self._detect_dependency_issues(service)
+                    anomalies.extend(dep_anomalies)
 
-            # Check dependency health issues
-            dep_anomalies = self._detect_dependency_issues(service)
-            anomalies.extend(dep_anomalies)
-
-            # Check exception patterns
-            exc_anomalies = self._detect_exception_issues(service)
-            anomalies.extend(exc_anomalies)
+                # Check exception patterns
+                if self.threshold_manager.is_root_cause_enabled("exception_surge") or \
+                   self.threshold_manager.is_root_cause_enabled("new_exception"):
+                    exc_anomalies = self._detect_exception_issues(service)
+                    anomalies.extend(exc_anomalies)
 
         return anomalies
 
@@ -957,9 +1167,10 @@ class AnomalyDetector:
 
                     if baseline["stddev"] > 0:
                         z_score = (current_latency - baseline["mean"]) / baseline["stddev"]
+                        threshold = self.threshold_manager.get_threshold("db_latency")
 
-                        if z_score > self.config.zscore_threshold:
-                            severity = Severity.WARNING if z_score < self.config.zscore_threshold * 1.5 else Severity.CRITICAL
+                        if z_score > threshold:
+                            severity = Severity.WARNING if z_score < threshold * 1.5 else Severity.CRITICAL
 
                             self._store_anomaly_score(
                                 service, metric, current_latency,
@@ -998,10 +1209,11 @@ class AnomalyDetector:
 
                     if baseline["stddev"] > 0:
                         z_score = (current_rate - baseline["mean"]) / baseline["stddev"]
+                        threshold = self.threshold_manager.get_threshold("db_error")
 
-                        # Database errors are more critical - lower threshold
-                        if z_score > self.config.zscore_threshold * 0.8 or current_rate > 0.1:
-                            severity = Severity.CRITICAL if current_rate > 0.2 or z_score > self.config.zscore_threshold * 1.5 else Severity.WARNING
+                        # Database errors use adaptive threshold
+                        if z_score > threshold or current_rate > 0.1:
+                            severity = Severity.CRITICAL if current_rate > 0.2 or z_score > threshold * 1.5 else Severity.WARNING
 
                             self._store_anomaly_score(
                                 service, metric, current_rate,
@@ -1063,9 +1275,10 @@ class AnomalyDetector:
 
                     if baseline["stddev"] > 0:
                         z_score = (current_latency - baseline["mean"]) / baseline["stddev"]
+                        threshold = self.threshold_manager.get_threshold("dependency_latency")
 
-                        if z_score > self.config.zscore_threshold:
-                            severity = Severity.WARNING if z_score < self.config.zscore_threshold * 1.5 else Severity.CRITICAL
+                        if z_score > threshold:
+                            severity = Severity.WARNING if z_score < threshold * 1.5 else Severity.CRITICAL
 
                             self._store_anomaly_score(
                                 service, metric, current_latency,
@@ -1107,9 +1320,10 @@ class AnomalyDetector:
 
                     if baseline["stddev"] > 0:
                         z_score = (current_rate - baseline["mean"]) / baseline["stddev"]
+                        threshold = self.threshold_manager.get_threshold("dependency_error")
 
-                        if z_score > self.config.zscore_threshold or current_rate > 0.15:
-                            severity = Severity.CRITICAL if current_rate > 0.25 or z_score > self.config.zscore_threshold * 1.5 else Severity.WARNING
+                        if z_score > threshold or current_rate > 0.15:
+                            severity = Severity.CRITICAL if current_rate > 0.25 or z_score > threshold * 1.5 else Severity.WARNING
 
                             self._store_anomaly_score(
                                 service, metric, current_rate,
@@ -1153,9 +1367,10 @@ class AnomalyDetector:
 
                 if baseline["stddev"] > 0 and current_hourly_rate > 0:
                     z_score = (current_hourly_rate - baseline["mean"]) / baseline["stddev"]
+                    threshold = self.threshold_manager.get_threshold("exception_surge")
 
-                    if z_score > self.config.zscore_threshold:
-                        severity = Severity.WARNING if z_score < self.config.zscore_threshold * 1.5 else Severity.CRITICAL
+                    if z_score > threshold:
+                        severity = Severity.WARNING if z_score < threshold * 1.5 else Severity.CRITICAL
 
                         self._store_anomaly_score(
                             service, "exception_rate", current_hourly_rate,
@@ -1784,6 +1999,16 @@ class PredictiveAlertsService:
         print(f"  Error rate warning: {self.config.error_rate_warning:.0%}")
         print(f"  Error rate critical: {self.config.error_rate_critical:.0%}")
         print(f"  sklearn available: {SKLEARN_AVAILABLE}")
+        print(f"\nRoot cause detection:")
+        print(f"  Enabled: {self.config.root_cause_enabled}")
+        if self.config.root_cause_enabled:
+            if self.config.root_cause_types:
+                print(f"  Types: {self.config.root_cause_types}")
+            else:
+                print(f"  Types: all (auto-discovered)")
+            print(f"  Adaptive thresholds: {self.config.adaptive_thresholds_enabled}")
+            if self.anomaly_detector.threshold_manager.multipliers:
+                print(f"  Threshold multipliers: {self.anomaly_detector.threshold_manager.multipliers}")
         print(f"\nInvestigation settings:")
         print(f"  LLM investigations: {'enabled' if self.investigator.enabled else 'disabled'}")
         if self.investigator.enabled:
@@ -1798,6 +2023,11 @@ class PredictiveAlertsService:
         self.baseline_computer.compute_all_baselines()
         self.last_baseline_update = time.time()
 
+        # Learn adaptive thresholds from alert history
+        if self.config.adaptive_thresholds_enabled:
+            print("[Service] Learning adaptive thresholds from alert history...")
+            self.anomaly_detector.learn_thresholds()
+
         print(f"\n[Service] Starting detection loop (interval: {self.config.detection_interval}s)...")
 
         while self.running:
@@ -1809,6 +2039,10 @@ class PredictiveAlertsService:
                     print("[Service] Updating baselines...")
                     self.baseline_computer.compute_all_baselines()
                     self.last_baseline_update = time.time()
+
+                    # Re-learn adaptive thresholds
+                    if self.config.adaptive_thresholds_enabled:
+                        self.anomaly_detector.learn_thresholds()
 
                 # Run anomaly detection
                 anomalies = self.anomaly_detector.detect_all()
