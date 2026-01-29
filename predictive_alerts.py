@@ -1012,8 +1012,36 @@ Start by checking for errors, exceptions, and anomalies in this service and its 
 
                 messages.append({"role": "user", "content": tool_results})
 
+            # Add the assistant's last response to messages
+            messages.append({"role": "assistant", "content": response.content})
+
+            # Request final structured summary
+            messages.append({
+                "role": "user",
+                "content": """Based on your investigation, provide your final analysis in this EXACT format:
+
+ROOT CAUSE: <one sentence describing the root cause>
+
+EVIDENCE:
+- <finding 1>
+- <finding 2>
+
+RECOMMENDED ACTIONS:
+1. <action 1>
+2. <action 2>"""
+            })
+
+            # Get structured response (no tools)
+            final_response = self.client.messages.create(
+                model=self.config.investigation_model,
+                max_tokens=self.config.investigation_max_tokens,
+                system=INVESTIGATION_SYSTEM_PROMPT,
+                messages=messages
+            )
+            total_tokens += final_response.usage.input_tokens + final_response.usage.output_tokens
+
             # Extract final analysis
-            analysis = self._extract_text(response)
+            analysis = self._extract_text(final_response)
 
             # Parse into structured format
             root_cause, actions, evidence = self._parse_analysis(analysis)
