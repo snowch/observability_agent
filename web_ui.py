@@ -171,19 +171,23 @@ def get_chat_tools():
         "name": "generate_chart",
         "description": """Generate a chart/graph to visualize data. Use this when the user asks for visualizations, trends, or graphs.
 
-The chart will be rendered in the chat interface. Supported chart types:
-- line: For time series data (latency over time, error rates over time)
-- bar: For comparing values across categories (errors by service)
-- doughnut: For showing proportions (request distribution)
+CRITICAL - Choose the correct chart type:
+- **line**: ONLY for TIME SERIES data where X-axis is timestamps/time buckets (e.g., "latency over time", "errors per hour")
+- **bar**: For CATEGORICAL comparisons where X-axis is categories like services, endpoints, operations (e.g., "latency by endpoint", "errors by service")
+- **doughnut**: For showing proportions/percentages of a whole (e.g., "request distribution")
 
-IMPORTANT: Always provide data sorted by the x-axis (usually time) for line charts.""",
+WRONG: Using line chart for "latency by endpoint" (endpoints are categories, not time)
+RIGHT: Using bar chart for "latency by endpoint"
+RIGHT: Using line chart for "latency over the last hour" (time series)
+
+IMPORTANT: Always provide data sorted appropriately - by time for line charts, by value (desc) for bar charts.""",
         "input_schema": {
             "type": "object",
             "properties": {
                 "chart_type": {
                     "type": "string",
                     "enum": ["line", "bar", "doughnut"],
-                    "description": "Type of chart to generate"
+                    "description": "Type of chart: 'line' for time series, 'bar' for categorical comparisons, 'doughnut' for proportions"
                 },
                 "title": {
                     "type": "string",
