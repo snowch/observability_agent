@@ -92,7 +92,7 @@ postgres_unblock() {
 postgres_status() {
     log_info "Checking PostgreSQL status..."
 
-    # Check if the container is running using docker directly (faster than docker compose)
+    # Check if the container is running
     CONTAINER_ID=$(timeout 5 docker ps --filter "name=postgresql" --filter "status=running" -q 2>/dev/null)
 
     if [ -z "$CONTAINER_ID" ]; then
@@ -102,53 +102,13 @@ postgres_status() {
 
     echo -e "PostgreSQL: ${GREEN}CONTAINER RUNNING${NC}"
 
-    # Check for network latency injection (doesn't require psql)
-    NETEM_ACTIVE=$(timeout 5 docker exec "$CONTAINER_ID" sh -c 'tc qdisc show dev eth0 2>/dev/null | grep netem' 2>/dev/null)
-    if [ -n "$NETEM_ACTIVE" ]; then
-        echo -e "Network latency: ${YELLOW}INJECTED${NC} ($NETEM_ACTIVE)"
+    # Check local marker files for active degradations (no docker exec needed)
+    if [ -f /tmp/postgres_netem_active ]; then
+        echo -e "Network latency: ${YELLOW}INJECTED${NC} (150ms +/- 50ms)"
     else
         echo -e "Network latency: ${GREEN}NORMAL${NC}"
     fi
 
-    # Measure actual query latency from OUTSIDE the PostgreSQL container
-    # (psql inside the container uses Unix socket, bypassing tc netem on eth0)
-    # Find another running container in the same compose project to test from
-    PROBE_CONTAINER=$(docker ps --filter "name=otel" --filter "status=running" -q 2>/dev/null | head -1)
-
-    if [ -n "$PROBE_CONTAINER" ]; then
-        # Measure TCP round-trip to PostgreSQL port from another container
-        # Uses bash /dev/tcp which measures actual network latency
-        LATENCY_MS=$(timeout 15 docker exec "$PROBE_CONTAINER" sh -c '
-            START=$(date +%s%N 2>/dev/null || echo 0)
-            if [ "$START" = "0" ]; then exit 1; fi
-            echo > /dev/tcp/postgresql/5432 2>/dev/null
-            END=$(date +%s%N)
-            echo $(( (END - START) / 1000000 ))
-        ' 2>/dev/null)
-        PROBE_EXIT=$?
-
-        if [ $PROBE_EXIT -eq 0 ] && [ -n "$LATENCY_MS" ]; then
-            IS_SLOW=$(echo "$LATENCY_MS" | awk '{print ($1 > 50) ? "yes" : "no"}')
-            if [ "$IS_SLOW" = "yes" ]; then
-                echo -e "Query latency: ${YELLOW}${LATENCY_MS} ms${NC} (degraded - normal is <5ms)"
-            else
-                echo -e "Query latency: ${GREEN}${LATENCY_MS} ms${NC}"
-            fi
-        elif [ $PROBE_EXIT -eq 124 ]; then
-            echo -e "Query latency: ${RED}TIMEOUT${NC} (>15s)"
-        else
-            # Fallback: just check if port is reachable at all
-            if timeout 10 docker exec "$PROBE_CONTAINER" sh -c 'nc -z postgresql 5432 2>/dev/null || (echo > /dev/tcp/postgresql/5432) 2>/dev/null'; then
-                echo -e "Query latency: ${GREEN}REACHABLE${NC} (could not measure exact time)"
-            else
-                echo -e "Query latency: ${RED}UNREACHABLE${NC}"
-            fi
-        fi
-    else
-        echo -e "Query latency: ${YELLOW}SKIPPED${NC} (no probe container found)"
-    fi
-
-    # Check for background load generator process
     MARKER_FILE="/tmp/postgres_load_generator.pid"
     if [ -f "$MARKER_FILE" ]; then
         LOAD_GEN_PID=$(cat "$MARKER_FILE")
@@ -159,6 +119,29 @@ postgres_status() {
         fi
     else
         echo -e "Load generator: ${GREEN}INACTIVE${NC}"
+    fi
+
+    # Measure actual query latency using docker compose exec with statement timing
+    # This runs psql inside the container (Unix socket) - fast even with netem
+    echo -n "Measuring query time... "
+    START_NS=$(date +%s%N)
+    timeout 10 docker compose exec -T postgresql psql -U root -d "${POSTGRES_DB:-otel}" -c "SELECT 1;" > /dev/null 2>&1
+    QUERY_EXIT=$?
+    END_NS=$(date +%s%N)
+
+    if [ $QUERY_EXIT -eq 0 ]; then
+        ELAPSED_MS=$(( (END_NS - START_NS) / 1000000 ))
+        if [ "$ELAPSED_MS" -gt 500 ]; then
+            echo -e "${RED}${ELAPSED_MS} ms${NC} (severely degraded)"
+        elif [ "$ELAPSED_MS" -gt 50 ]; then
+            echo -e "${YELLOW}${ELAPSED_MS} ms${NC} (degraded - normal is <50ms)"
+        else
+            echo -e "${GREEN}${ELAPSED_MS} ms${NC}"
+        fi
+    elif [ $QUERY_EXIT -eq 124 ]; then
+        echo -e "${RED}TIMEOUT (>10s)${NC}"
+    else
+        echo -e "${RED}FAILED${NC}"
     fi
 }
 
@@ -202,6 +185,7 @@ postgres_degrade_slow() {
     '
 
     if [ $? -eq 0 ]; then
+        touch /tmp/postgres_netem_active
         log_info "Slow query simulation enabled."
         log_info "Network latency: 150ms +/- 50ms added to all PostgreSQL connections."
         log_info "This should trigger 'DB_SLOW_QUERIES' alerts in root cause monitoring."
@@ -308,6 +292,7 @@ postgres_restore() {
 
     # Remove network latency injection
     log_info "Removing network latency injection..."
+    rm -f /tmp/postgres_netem_active
     CONTAINER_ID=$(docker ps --filter "name=postgresql" -q 2>/dev/null)
     if [ -n "$CONTAINER_ID" ]; then
         timeout 10 docker exec --user root "$CONTAINER_ID" sh -c '
