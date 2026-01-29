@@ -1913,25 +1913,6 @@
         </div>
 
         <div class="input-area">
-            <div class="input-options">
-                <div class="time-selector">
-                    <label for="chat-time-range">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <circle cx="12" cy="12" r="10"></circle>
-                            <polyline points="12 6 12 12 16 14"></polyline>
-                        </svg>
-                        Time Range:
-                    </label>
-                    <select id="chat-time-range">
-                        <option value="5m">Last 5 min</option>
-                        <option value="15m" selected>Last 15 min</option>
-                        <option value="30m">Last 30 min</option>
-                        <option value="1h">Last 1 hour</option>
-                        <option value="6h">Last 6 hours</option>
-                        <option value="24h">Last 24 hours</option>
-                    </select>
-                </div>
-            </div>
             <div class="input-container">
                 <textarea id="message-input" placeholder="Describe the issue or ask for a visualization..." onkeydown="handleKeyDown(event)"></textarea>
                 <button id="send-btn" onclick="sendMessage()">
@@ -2579,8 +2560,6 @@
             const message = input.value.trim();
             if (!message || isLoading) return;
 
-            const timeRange = document.getElementById('chat-time-range').value;
-
             isLoading = true;
             document.getElementById('send-btn').disabled = true;
             addMessage('user', message);
@@ -2593,7 +2572,7 @@
                 const response = await fetch('/api/chat/stream', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message, session_id: sessionId, time_range: timeRange })
+                    body: JSON.stringify({ message, session_id: sessionId })
                 });
 
                 const reader = response.body.getReader();
