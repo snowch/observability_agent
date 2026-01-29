@@ -2166,6 +2166,16 @@
             background: var(--bg-tertiary);
         }
 
+        .alert-action-btn.warning {
+            background: rgba(245, 158, 11, 0.15);
+            color: var(--accent-warning);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+        }
+
+        .alert-action-btn.warning:hover {
+            background: rgba(245, 158, 11, 0.25);
+        }
+
         .alert-investigation-stats {
             display: flex;
             gap: 16px;
@@ -3793,6 +3803,7 @@ ${escapeHtml(alert.supporting_evidence)}</div>
 
                 <div class="alert-actions">
                     <button class="alert-action-btn secondary" onclick="closeAlertModal()">Close</button>
+                    <button class="alert-action-btn warning" onclick="archiveAlert('${escapeHtml(alert.alert_id)}')">Archive</button>
                     <button class="alert-action-btn primary" onclick="askAboutAlert('${escapeHtml(alert.alert_id)}', '${escapeHtml(alert.service_name)}', '${escapeHtml(alertType)}', ${hasInvestigation ? 'true' : 'false'})">
                         ${hasInvestigation ? 'Ask Follow-up' : 'Investigate in Chat'}
                     </button>
@@ -3848,6 +3859,31 @@ ${escapeHtml(alert.supporting_evidence)}</div>
                         btn.textContent = 'Request Investigation';
                     }, 3000);
                 }
+            }
+        }
+
+        async function archiveAlert(alertId) {
+            try {
+                const response = await fetch(`/api/alerts/${alertId}/archive`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    closeAlertModal();
+                    // Remove from cache and refresh
+                    if (window.alertsCache) {
+                        delete window.alertsCache[alertId];
+                    }
+                    refreshAlerts();
+                    refreshActivity();
+                } else {
+                    alert('Failed to archive: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                console.error('Archive failed:', error);
+                alert('Failed to archive alert');
             }
         }
 
