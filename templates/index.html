@@ -2952,6 +2952,12 @@
             text = text.replace(/<p>\s*<\/p>/g, '');
             text = text.replace(/<br>\s*(<[ou]l>)/g, '$1');
             text = text.replace(/(<\/[ou]l>)\s*<br>/g, '$1');
+            // Remove <br> between and around list items
+            text = text.replace(/<\/li>\s*(<br>\s*)+<li>/g, '</li><li>');
+            text = text.replace(/<\/li>\s*(<br>\s*)+<\/ul>/g, '</li></ul>');
+            text = text.replace(/<\/li>\s*(<br>\s*)+<\/ol>/g, '</li></ol>');
+            text = text.replace(/<ul>\s*(<br>\s*)+<li>/g, '<ul><li>');
+            text = text.replace(/<ol>\s*(<br>\s*)+<li>/g, '<ol><li>');
             text = text.replace(/<p><br>/g, '<p>');
             text = text.replace(/<br><\/p>/g, '</p>');
             return text;
