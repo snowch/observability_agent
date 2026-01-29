@@ -3711,11 +3711,14 @@ ${escapeHtml(alert.supporting_evidence)}</div>
             } else {
                 investigationHtml = `
                     <div class="alert-no-investigation">
-                        <div class="alert-no-investigation-icon">🔄</div>
+                        <div class="alert-no-investigation-icon">🔍</div>
                         <div class="alert-no-investigation-text">
-                            No automated investigation available yet.<br>
-                            The system may be processing this alert or rate-limited.
+                            No investigation available yet.<br>
+                            The automated system may be rate-limited or processing other alerts.
                         </div>
+                        <button class="alert-action-btn primary" onclick="requestInvestigation('${escapeHtml(alert.alert_id)}')" id="investigate-btn-${escapeHtml(alert.alert_id)}">
+                            Request Investigation
+                        </button>
                     </div>
                 `;
             }
@@ -3777,6 +3780,51 @@ ${escapeHtml(alert.supporting_evidence)}</div>
 
         function closeAlertModal() {
             document.getElementById('alert-modal').classList.remove('active');
+        }
+
+        async function requestInvestigation(alertId) {
+            const btn = document.getElementById(`investigate-btn-${alertId}`);
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = 'Investigating...';
+            }
+
+            try {
+                const response = await fetch(`/api/alerts/${alertId}/investigate`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    // Update the cache with investigation results
+                    if (window.alertsCache && window.alertsCache[alertId]) {
+                        Object.assign(window.alertsCache[alertId], data.investigation);
+                    }
+                    // Refresh the modal to show results
+                    const alert = window.alertsCache ? window.alertsCache[alertId] : null;
+                    openAlertModal(alert, alertId);
+                    // Refresh alerts list too
+                    refreshAlerts();
+                } else {
+                    if (btn) {
+                        btn.textContent = data.error || 'Failed';
+                        btn.disabled = false;
+                        setTimeout(() => {
+                            btn.textContent = 'Request Investigation';
+                        }, 3000);
+                    }
+                }
+            } catch (error) {
+                console.error('Investigation request failed:', error);
+                if (btn) {
+                    btn.textContent = 'Error - Try Again';
+                    btn.disabled = false;
+                    setTimeout(() => {
+                        btn.textContent = 'Request Investigation';
+                    }, 3000);
+                }
+            }
         }
 
         function askAboutAlert(alertId, serviceName, alertType, hasInvestigation) {
