@@ -3052,17 +3052,18 @@
             text = text.replace(/(\n[ \t]*\d+[\.\)])/g, '\n$1');
 
             // Lists - convert to temp markers, strip extra whitespace
-            text = text.replace(/^[ \t]*(\d+)[\.\)] (.*$)/gm, '{{OLI}}$2{{/OLI}}');
-            text = text.replace(/^[ \t]*[a-z][\.\)] (.*$)/gm, '{{OLI}}$1{{/OLI}}');
-            text = text.replace(/^[ \t]*[-*•] (.*$)/gm, '{{ULI}}$1{{/ULI}}');
+            // Note: Using <oli>/<uli> tags instead of {{OLI}}/{{ULI}} to avoid Jinja2 conflicts
+            text = text.replace(/^[ \t]*(\d+)[\.\)] (.*$)/gm, '<oli>$2</oli>');
+            text = text.replace(/^[ \t]*[a-z][\.\)] (.*$)/gm, '<oli>$1</oli>');
+            text = text.replace(/^[ \t]*[-*•] (.*$)/gm, '<uli>$1</uli>');
 
             // Wrap consecutive list items (handling newlines between them)
-            text = text.replace(/((?:\{\{OLI\}\}.*?\{\{\/OLI\}\}\n*)+)/g, '<ol>$1</ol>');
-            text = text.replace(/((?:\{\{ULI\}\}.*?\{\{\/ULI\}\}\n*)+)/g, '<ul>$1</ul>');
+            text = text.replace(/((?:<oli>.*?<\/oli>\n*)+)/g, '<ol>$1</ol>');
+            text = text.replace(/((?:<uli>.*?<\/uli>\n*)+)/g, '<ul>$1</ul>');
 
             // Convert markers to actual tags
-            text = text.replace(/\{\{OLI\}\}/g, '<li>').replace(/\{\{\/OLI\}\}/g, '</li>');
-            text = text.replace(/\{\{ULI\}\}/g, '<li>').replace(/\{\{\/ULI\}\}/g, '</li>');
+            text = text.replace(/<oli>/g, '<li>').replace(/<\/oli>/g, '</li>');
+            text = text.replace(/<uli>/g, '<li>').replace(/<\/uli>/g, '</li>');
 
             // Clean whitespace inside lists
             text = text.replace(/<\/li>\s+<li>/g, '</li><li>');
