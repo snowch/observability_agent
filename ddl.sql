@@ -107,12 +107,16 @@ CREATE TABLE vast."csnow-db|otel".anomaly_scores (
 );
 
 -- Alerts: stores generated alerts with severity and status
+-- Alert types include:
+--   Symptom-based: 'error_spike', 'latency_degradation', 'throughput_drop', 'anomaly', 'trend', 'service_down'
+--   Root cause: 'db_connection_failure', 'db_slow_queries', 'dependency_failure',
+--               'dependency_latency', 'exception_surge', 'new_exception_type'
 CREATE TABLE vast."csnow-db|otel".alerts (
    alert_id varchar,
    created_at timestamp(9),
    updated_at timestamp(9),
    service_name varchar,
-   alert_type varchar,            -- 'error_spike', 'latency_degradation', 'throughput_drop', 'anomaly', 'trend'
+   alert_type varchar,            -- See alert types above
    severity varchar,              -- 'info', 'warning', 'critical'
    title varchar,
    description varchar,
@@ -121,7 +125,7 @@ CREATE TABLE vast."csnow-db|otel".alerts (
    threshold_value double,
    baseline_value double,
    z_score double,
-   status varchar,                -- 'active', 'acknowledged', 'resolved'
+   status varchar,                -- 'active', 'acknowledged', 'resolved', 'archived'
    resolved_at timestamp(9),
    auto_resolved boolean
 );

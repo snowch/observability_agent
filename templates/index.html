@@ -264,6 +264,24 @@
         .alert-severity.warning { color: var(--accent-warning); }
         .alert-severity.info { color: var(--accent-primary); }
 
+        .alert-category {
+            font-size: 9px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: 500;
+            margin-left: 6px;
+        }
+
+        .alert-category.root-cause {
+            background: rgba(139, 92, 246, 0.2);
+            color: #a78bfa;
+        }
+
+        .alert-category.symptom {
+            background: rgba(107, 114, 128, 0.2);
+            color: #9ca3af;
+        }
+
         .alert-time {
             font-size: 10px;
             color: var(--text-muted);
@@ -3622,11 +3640,15 @@
                         const severity = alert.severity || 'info';
                         const timeAgo = formatTimeAgo(alert.created_at);
                         const hasInvestigation = alert.root_cause_summary;
+                        const isRootCauseAlert = isRootCauseAlertType(alert.alert_type);
+                        const categoryLabel = isRootCauseAlert ? 'ROOT CAUSE' : 'SYMPTOM';
+                        const categoryClass = isRootCauseAlert ? 'root-cause' : 'symptom';
 
                         return `
                             <div class="alert-item alert-${severity}" onclick="investigateAlert('${escapeHtml(alert.alert_id)}')">
                                 <div class="alert-header">
                                     <span class="alert-severity ${severity}">${severity}</span>
+                                    <span class="alert-category ${categoryClass}">${categoryLabel}</span>
                                     <span class="alert-time">${timeAgo}${hasInvestigation ? ' • analyzed' : ''}</span>
                                 </div>
                                 <div class="alert-title">${escapeHtml(alert.title || alert.alert_type)}</div>
@@ -3648,6 +3670,20 @@
                 console.error('Failed to refresh alerts:', error);
                 document.getElementById('alerts-list').innerHTML = '<div class="empty-state">Alerts unavailable</div>';
             }
+        }
+
+        // Root cause alert types - these indicate underlying issues that can lead to symptoms
+        const ROOT_CAUSE_ALERT_TYPES = [
+            'db_connection_failure',
+            'db_slow_queries',
+            'dependency_failure',
+            'dependency_latency',
+            'exception_surge',
+            'new_exception_type'
+        ];
+
+        function isRootCauseAlertType(alertType) {
+            return ROOT_CAUSE_ALERT_TYPES.includes(alertType);
         }
 
         function formatTimeAgo(isoString) {
@@ -3692,6 +3728,9 @@
             const alertType = (alert.alert_type || '').replace(/_/g, ' ');
             const hasInvestigation = alert.root_cause_summary;
             const createdAt = alert.created_at ? new Date(alert.created_at).toLocaleString() : 'Unknown';
+            const isRootCause = isRootCauseAlertType(alert.alert_type);
+            const categoryLabel = isRootCause ? 'ROOT CAUSE' : 'SYMPTOM';
+            const categoryClass = isRootCause ? 'root-cause' : 'symptom';
 
             let investigationHtml;
             if (hasInvestigation) {
@@ -3756,6 +3795,7 @@ ${escapeHtml(alert.supporting_evidence)}</div>
             content.innerHTML = `
                 <div class="alert-detail-header">
                     <span class="alert-detail-severity ${severity}">${severity}</span>
+                    <span class="alert-category ${categoryClass}" style="margin-left: 8px;">${categoryLabel}</span>
                     <span class="alert-detail-title">${escapeHtml(alert.title || alertType)}</span>
                 </div>
 
@@ -3767,6 +3807,10 @@ ${escapeHtml(alert.supporting_evidence)}</div>
                     <div class="alert-meta-item">
                         <span class="alert-meta-label">Service</span>
                         <span class="alert-meta-value">${escapeHtml(alert.service_name)}</span>
+                    </div>
+                    <div class="alert-meta-item">
+                        <span class="alert-meta-label">Category</span>
+                        <span class="alert-meta-value">${isRootCause ? 'Root Cause (proactive)' : 'Symptom (reactive)'}</span>
                     </div>
                     <div class="alert-meta-item">
                         <span class="alert-meta-label">Type</span>
