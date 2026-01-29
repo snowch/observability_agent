@@ -91,54 +91,45 @@ postgres_unblock() {
 
 postgres_status() {
     log_info "Checking PostgreSQL status..."
-    if docker compose exec -T postgresql psql -U root -c "SELECT 1;" > /dev/null 2>&1; then
+
+    # First check if the container is running at all
+    CONTAINER_RUNNING=$(docker compose ps postgresql --format '{{.State}}' 2>/dev/null | grep -i running)
+
+    if [ -z "$CONTAINER_RUNNING" ]; then
+        echo -e "PostgreSQL: ${RED}DOWN${NC} (container not running)"
+        return
+    fi
+
+    # Container is running - check if we can query it (with longer timeout)
+    if timeout 30 docker compose exec -T postgresql psql -U root -c "SELECT 1;" > /dev/null 2>&1; then
         echo -e "PostgreSQL: ${GREEN}RUNNING${NC}"
-
-        # Check connection permissions
-        CONNECT_PRIV=$(docker compose exec -T postgresql psql -U root -d "${POSTGRES_DB:-otel}" -t -c \
-            "SELECT has_database_privilege('public', '${POSTGRES_DB:-otel}', 'CONNECT');" 2>/dev/null | tr -d ' ')
-
-        if [ "$CONNECT_PRIV" = "t" ]; then
-            echo -e "Connections: ${GREEN}ALLOWED${NC}"
-        else
-            echo -e "Connections: ${RED}BLOCKED${NC}"
-        fi
-
-        # Check for load generator function (new approach)
-        LOAD_GEN_FUNC=$(docker compose exec -T postgresql psql -U root -d "${POSTGRES_DB:-otel}" -t -c \
-            "SELECT COUNT(*) FROM pg_proc WHERE proname = 'run_load_iteration';" 2>/dev/null | tr -d ' ')
-
-        # Check for background load generator process
-        MARKER_FILE="/tmp/postgres_load_generator.pid"
-        LOAD_GEN_RUNNING="no"
-        if [ -f "$MARKER_FILE" ]; then
-            LOAD_GEN_PID=$(cat "$MARKER_FILE")
-            if kill -0 "$LOAD_GEN_PID" 2>/dev/null; then
-                LOAD_GEN_RUNNING="yes"
-            fi
-        fi
-
-        if [ "$LOAD_GEN_FUNC" = "1" ] && [ "$LOAD_GEN_RUNNING" = "yes" ]; then
-            echo -e "Load generator: ${YELLOW}ACTIVE${NC} (PID: $LOAD_GEN_PID)"
-        elif [ "$LOAD_GEN_FUNC" = "1" ]; then
-            echo -e "Load generator: ${YELLOW}CONFIGURED${NC} (not running)"
-        else
-            echo -e "Load generator: ${GREEN}INACTIVE${NC}"
-        fi
-
-        # Check work_mem setting (reduced = degraded mode)
-        WORK_MEM=$(docker compose exec -T postgresql psql -U root -d "${POSTGRES_DB:-otel}" -t -c \
-            "SHOW work_mem;" 2>/dev/null | tr -d ' ')
-        if [ -n "$WORK_MEM" ]; then
-            # Check if work_mem is very low (64kB or 512kB indicates degraded mode)
-            if echo "$WORK_MEM" | grep -qE "^(64|512)kB$"; then
-                echo -e "Performance: ${YELLOW}DEGRADED${NC} (work_mem=$WORK_MEM)"
-            else
-                echo -e "Performance: ${GREEN}NORMAL${NC} (work_mem=$WORK_MEM)"
-            fi
-        fi
     else
-        echo -e "PostgreSQL: ${RED}DOWN${NC}"
+        echo -e "PostgreSQL: ${YELLOW}RUNNING (SLOW)${NC} - queries taking >30s"
+    fi
+
+    # Check for network latency injection
+    NETEM_ACTIVE=$(docker compose exec -T --user root postgresql sh -c 'tc qdisc show dev eth0 2>/dev/null | grep -c netem' 2>/dev/null || echo "0")
+    if [ "$NETEM_ACTIVE" != "0" ]; then
+        DELAY_INFO=$(docker compose exec -T --user root postgresql sh -c 'tc qdisc show dev eth0 2>/dev/null | grep -o "delay [0-9.]*ms"' 2>/dev/null || echo "delay unknown")
+        echo -e "Network latency: ${YELLOW}INJECTED${NC} ($DELAY_INFO)"
+    else
+        echo -e "Network latency: ${GREEN}NORMAL${NC}"
+    fi
+
+    # Check for background load generator process
+    MARKER_FILE="/tmp/postgres_load_generator.pid"
+    LOAD_GEN_RUNNING="no"
+    if [ -f "$MARKER_FILE" ]; then
+        LOAD_GEN_PID=$(cat "$MARKER_FILE")
+        if kill -0 "$LOAD_GEN_PID" 2>/dev/null; then
+            LOAD_GEN_RUNNING="yes"
+        fi
+    fi
+
+    if [ "$LOAD_GEN_RUNNING" = "yes" ]; then
+        echo -e "Load generator: ${YELLOW}ACTIVE${NC} (PID: $LOAD_GEN_PID)"
+    else
+        echo -e "Load generator: ${GREEN}INACTIVE${NC}"
     fi
 }
 
@@ -160,73 +151,81 @@ postgres_degrade() {
 }
 
 postgres_degrade_slow() {
-    log_info "Enabling slow query simulation..."
+    log_info "Enabling slow query simulation via network latency..."
 
-    # Create load generation infrastructure in PostgreSQL
+    # Use tc (traffic control) to add latency to PostgreSQL container's network
+    # This adds 100-200ms delay to ALL network traffic to/from PostgreSQL
+    docker compose exec -T --user root postgresql sh -c '
+        # Install iproute2 if not present (for tc command)
+        apt-get update -qq && apt-get install -y -qq iproute2 2>/dev/null || apk add --quiet iproute2 2>/dev/null || true
+
+        # Add 150ms latency with 50ms jitter to the network interface
+        tc qdisc add dev eth0 root netem delay 150ms 50ms 2>/dev/null || \
+        tc qdisc change dev eth0 root netem delay 150ms 50ms 2>/dev/null
+
+        echo "Network latency injection configured"
+    '
+
+    if [ $? -eq 0 ]; then
+        log_info "Slow query simulation enabled."
+        log_info "Network latency: 150ms +/- 50ms added to all PostgreSQL connections."
+        log_info "This should trigger 'DB_SLOW_QUERIES' alerts in root cause monitoring."
+    else
+        log_error "Failed to inject network latency. Container may not have NET_ADMIN capability."
+        log_info "Falling back to connection starvation method..."
+        postgres_degrade_slow_fallback
+    fi
+}
+
+# Fallback method if tc doesn't work
+postgres_degrade_slow_fallback() {
+    log_info "Using connection starvation method..."
+
+    # Reduce max_connections and consume most of them
     docker compose exec -T postgresql psql -U root -d "${POSTGRES_DB:-otel}" <<'EOF'
--- Create a large table for expensive operations
-CREATE TABLE IF NOT EXISTS _load_generator (
-    id SERIAL PRIMARY KEY,
-    data TEXT,
-    num INTEGER,
-    created_at TIMESTAMP DEFAULT now()
+-- Dramatically reduce max_connections (requires restart to take effect)
+-- Instead, we'll use pg_sleep in a different way
+
+-- Create a table for lock contention
+CREATE TABLE IF NOT EXISTS _lock_target (
+    id INTEGER PRIMARY KEY,
+    data TEXT
 );
+INSERT INTO _lock_target VALUES (1, 'lock target') ON CONFLICT DO NOTHING;
 
--- Populate with data if empty
-INSERT INTO _load_generator (data, num)
-SELECT repeat('x', 1000), generate_series(1, 50000)
-WHERE NOT EXISTS (SELECT 1 FROM _load_generator LIMIT 1);
-
--- Reduce work_mem to force disk-based sorts (slows down all queries)
-ALTER SYSTEM SET work_mem = '64kB';
--- Reduce effective_cache_size to pessimize query plans
-ALTER SYSTEM SET effective_cache_size = '32MB';
--- Add artificial delay to all statements
-ALTER SYSTEM SET log_min_duration_statement = 0;
-
-SELECT pg_reload_conf();
-
--- Create a function that runs expensive operations
-CREATE OR REPLACE FUNCTION run_load_iteration() RETURNS void AS $$
+-- Create function that holds locks
+CREATE OR REPLACE FUNCTION hold_lock_briefly() RETURNS void AS $$
 BEGIN
-    -- Expensive self-join with sorting (consumes CPU and I/O)
-    PERFORM COUNT(*) FROM _load_generator a
-    CROSS JOIN (SELECT * FROM _load_generator ORDER BY random() LIMIT 100) b
-    WHERE a.num % 7 = b.num % 11;
-
-    -- Force some I/O with large sorts
-    PERFORM array_agg(data ORDER BY random()) FROM _load_generator LIMIT 5000;
+    -- Hold an exclusive lock on the target row for 100ms
+    PERFORM * FROM _lock_target WHERE id = 1 FOR UPDATE;
+    PERFORM pg_sleep(0.1);
 END;
 $$ LANGUAGE plpgsql;
 EOF
 
-    # Start background load generator process
-    log_info "Starting background load generator..."
-
-    # Create a marker file to track the load generator
+    # Start multiple lock-holding processes
     MARKER_FILE="/tmp/postgres_load_generator.pid"
 
-    # Kill any existing load generator
     if [ -f "$MARKER_FILE" ]; then
         OLD_PID=$(cat "$MARKER_FILE")
         kill "$OLD_PID" 2>/dev/null || true
+        pkill -P "$OLD_PID" 2>/dev/null || true
     fi
 
-    # Start continuous load generator in background
     (
         while true; do
-            docker compose exec -T postgresql psql -U root -d "${POSTGRES_DB:-otel}" -c \
-                "SELECT run_load_iteration();" > /dev/null 2>&1
-            sleep 0.5
+            # Run multiple lock holders in parallel
+            for i in 1 2 3 4 5; do
+                docker compose exec -T postgresql psql -U root -d "${POSTGRES_DB:-otel}" -c \
+                    "SELECT hold_lock_briefly();" > /dev/null 2>&1 &
+            done
+            wait
+            sleep 0.1
         done
     ) &
 
     echo $! > "$MARKER_FILE"
-
-    log_info "Slow query simulation enabled."
-    log_info "Background load generator running (PID: $(cat $MARKER_FILE))"
-    log_info "PostgreSQL resources are now being consumed, slowing all queries."
-    log_info "This should trigger 'DB_SLOW_QUERIES' alerts in root cause monitoring."
+    log_info "Lock contention simulation running (PID: $(cat $MARKER_FILE))"
 }
 
 postgres_degrade_memory() {
@@ -272,11 +271,20 @@ postgres_restore() {
         rm -f "$MARKER_FILE"
     fi
 
+    # Remove network latency injection
+    log_info "Removing network latency injection..."
+    docker compose exec -T --user root postgresql sh -c '
+        tc qdisc del dev eth0 root 2>/dev/null || true
+        echo "Network latency removed"
+    ' 2>/dev/null || true
+
     docker compose exec -T postgresql psql -U root -d "${POSTGRES_DB:-otel}" <<'EOF'
--- Remove load generator function and table
+-- Remove load generator functions and tables
 DROP FUNCTION IF EXISTS run_load_iteration() CASCADE;
 DROP FUNCTION IF EXISTS simulate_slow_query() CASCADE;
+DROP FUNCTION IF EXISTS hold_lock_briefly() CASCADE;
 DROP TABLE IF EXISTS _load_generator;
+DROP TABLE IF EXISTS _lock_target;
 
 -- Reset all memory/performance settings to defaults
 ALTER SYSTEM RESET work_mem;
