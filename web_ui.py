@@ -1558,6 +1558,66 @@ def get_anomalies():
     return jsonify(data)
 
 
+@app.route('/api/alerts/activity', methods=['GET'])
+def get_alert_activity():
+    """Get recent alert activity (created, resolved, auto-resolved)."""
+    executor = get_query_executor()
+
+    minutes = min(int(request.args.get('minutes', 60)), 1440)  # max 24 hours
+    limit = min(int(request.args.get('limit', 20)), 100)
+
+    data = {
+        'events': []
+    }
+
+    # Get recent alert events from alerts table
+    # We construct events from created_at, resolved_at timestamps
+    activity_query = f"""
+    WITH alert_events AS (
+        -- Created events
+        SELECT
+            created_at as event_time,
+            'created' as event_type,
+            service_name,
+            alert_type,
+            severity,
+            title
+        FROM alerts
+        WHERE created_at > NOW() - INTERVAL '{minutes}' MINUTE
+
+        UNION ALL
+
+        -- Resolved events (auto and manual)
+        SELECT
+            resolved_at as event_time,
+            CASE WHEN auto_resolved = true THEN 'auto_resolved' ELSE 'resolved' END as event_type,
+            service_name,
+            alert_type,
+            severity,
+            title
+        FROM alerts
+        WHERE resolved_at IS NOT NULL
+            AND resolved_at > NOW() - INTERVAL '{minutes}' MINUTE
+    )
+    SELECT
+        event_time,
+        event_type,
+        service_name,
+        alert_type,
+        severity,
+        title
+    FROM alert_events
+    ORDER BY event_time DESC
+    LIMIT {limit}
+    """
+
+    result = executor.execute_query(activity_query)
+    if result['success']:
+        data['events'] = result['rows']
+
+    return jsonify(data)
+
+
 # =============================================================================
 # Main
 # =============================================================================
