@@ -1412,6 +1412,26 @@ def resolve_alert(alert_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/alerts/<alert_id>/archive', methods=['POST'])
+def archive_alert(alert_id):
+    """Archive an alert (moves it out of active view but keeps history)."""
+    executor = get_query_executor()
+
+    sql = f"""
+    UPDATE alerts
+    SET status = 'archived',
+        updated_at = NOW()
+    WHERE alert_id = '{alert_id}'
+    """
+
+    try:
+        cursor = executor.conn.cursor()
+        cursor.execute(sql)
+        return jsonify({'success': True, 'message': f'Alert {alert_id} archived'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/alerts/<alert_id>/investigate', methods=['POST'])
 def investigate_alert(alert_id):
     """Manually trigger investigation for an alert."""
