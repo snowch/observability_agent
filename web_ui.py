@@ -1401,6 +1401,198 @@ def resolve_alert(alert_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/alerts/<alert_id>/investigate', methods=['POST'])
+def investigate_alert(alert_id):
+    """Manually trigger investigation for an alert."""
+    executor = get_query_executor()
+
+    # Get alert details
+    alert_query = f"""
+    SELECT alert_id, service_name, alert_type, severity, title, description
+    FROM alerts
+    WHERE alert_id = '{alert_id}'
+    """
+    result = executor.execute_query(alert_query)
+    if not result['success'] or not result['rows']:
+        return jsonify({'success': False, 'error': 'Alert not found'}), 404
+
+    alert = result['rows'][0]
+
+    # Check if already investigated
+    inv_query = f"SELECT investigation_id FROM alert_investigations WHERE alert_id = '{alert_id}'"
+    inv_result = executor.execute_query(inv_query)
+    if inv_result['success'] and inv_result['rows']:
+        return jsonify({'success': False, 'error': 'Alert already has investigation'}), 400
+
+    # Run investigation
+    try:
+        investigation = run_alert_investigation(executor, alert)
+        if investigation:
+            return jsonify({'success': True, 'investigation': investigation})
+        else:
+            return jsonify({'success': False, 'error': 'Investigation failed'}), 500
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def run_alert_investigation(executor, alert):
+    """Run LLM investigation for an alert."""
+    import uuid
+
+    service = alert.get('service_name', '')
+    alert_type = alert.get('alert_type', '')
+    alert_id = alert.get('alert_id', '')
+    description = alert.get('description', '')
+
+    system_prompt = """You are an expert SRE assistant performing root cause analysis.
+You have access to observability data via SQL queries (Trino/Presto dialect).
+
+Available tables:
+- traces_otel_analytic: start_time, trace_id, span_id, parent_span_id, service_name, span_name, span_kind, status_code, http_status, duration_ns, db_system
+- logs_otel_analytic: timestamp, service_name, severity_number, severity_text, body_text, trace_id, span_id
+- span_events_otel_analytic: timestamp, trace_id, span_id, service_name, span_name, event_name, exception_type, exception_message, exception_stacktrace
+
+TRINO SQL RULES:
+- Time filter: WHERE start_time > current_timestamp - INTERVAL '15' MINUTE
+- NO semicolons, NO square brackets, NO 'timestamp' for traces (use start_time)
+- Interval: INTERVAL '15' MINUTE (quoted number)
+
+Be CONCISE. Output:
+ROOT CAUSE: <one sentence>
+EVIDENCE:
+- <finding 1>
+- <finding 2>
+RECOMMENDED ACTIONS:
+1. <action 1>
+2. <action 2>"""
+
+    tools = [{
+        "name": "execute_sql",
+        "description": "Execute a SQL query against the observability database",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "sql": {"type": "string", "description": "The SQL query to execute"}
+            },
+            "required": ["sql"]
+        }
+    }]
+
+    user_prompt = f"""Investigate this alert:
+Service: {service}
+Alert Type: {alert_type}
+Description: {description}
+
+Find the root cause by querying the data. Focus on the last 15 minutes."""
+
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    messages = [{"role": "user", "content": user_prompt}]
+    queries_executed = 0
+    total_tokens = 0
+
+    for _ in range(5):
+        response = client.messages.create(
+            model=ANTHROPIC_MODEL,
+            max_tokens=2000,
+            system=system_prompt,
+            tools=tools,
+            messages=messages
+        )
+        total_tokens += response.usage.input_tokens + response.usage.output_tokens
+
+        tool_calls = [b for b in response.content if b.type == "tool_use"]
+        if not tool_calls:
+            break
+
+        messages.append({"role": "assistant", "content": response.content})
+        tool_results = []
+
+        for tool_call in tool_calls:
+            if tool_call.name == "execute_sql":
+                sql = tool_call.input.get("sql", "").strip().rstrip(';')
+                queries_executed += 1
+                result = executor.execute_query(sql)
+                if result['success']:
+                    result_str = json.dumps(result['rows'][:20], default=str)
+                else:
+                    result_str = json.dumps([{"error": result.get('error', 'Query failed')}])
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tool_call.id,
+                    "content": result_str
+                })
+
+        messages.append({"role": "user", "content": tool_results})
+
+    # Get final summary
+    if response.stop_reason != "end_turn":
+        messages.append({"role": "assistant", "content": response.content})
+
+    messages.append({
+        "role": "user",
+        "content": "Provide your final analysis in this format:\nROOT CAUSE: <one sentence>\nEVIDENCE:\n- <finding>\nRECOMMENDED ACTIONS:\n1. <action>"
+    })
+
+    final = client.messages.create(
+        model=ANTHROPIC_MODEL,
+        max_tokens=1000,
+        system=system_prompt,
+        messages=messages
+    )
+    total_tokens += final.usage.input_tokens + final.usage.output_tokens
+
+    # Parse response
+    text = "".join(b.text for b in final.content if hasattr(b, 'text'))
+
+    root_cause = ""
+    actions = ""
+    evidence = ""
+
+    if "ROOT CAUSE:" in text:
+        parts = text.split("ROOT CAUSE:", 1)[1]
+        if "EVIDENCE:" in parts:
+            root_cause = parts.split("EVIDENCE:")[0].strip()
+            parts = parts.split("EVIDENCE:", 1)[1]
+            if "RECOMMENDED ACTIONS:" in parts:
+                evidence = parts.split("RECOMMENDED ACTIONS:")[0].strip()
+                actions = parts.split("RECOMMENDED ACTIONS:", 1)[1].strip()
+            else:
+                evidence = parts.strip()
+        else:
+            root_cause = parts.strip()
+
+    # Store investigation
+    investigation_id = str(uuid.uuid4())[:8]
+    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+    store_sql = f"""
+    INSERT INTO alert_investigations (
+        investigation_id, alert_id, investigated_at, service_name, alert_type,
+        model_used, root_cause_summary, recommended_actions, supporting_evidence,
+        queries_executed, tokens_used
+    ) VALUES (
+        '{investigation_id}', '{alert_id}', TIMESTAMP '{now}', '{service}', '{alert_type}',
+        '{ANTHROPIC_MODEL}', '{root_cause.replace("'", "''")}', '{actions.replace("'", "''")}',
+        '{evidence.replace("'", "''")}', {queries_executed}, {total_tokens}
+    )
+    """
+
+    try:
+        cursor = executor.conn.cursor()
+        cursor.execute(store_sql)
+    except Exception as e:
+        print(f"Failed to store investigation: {e}")
+
+    return {
+        "investigation_id": investigation_id,
+        "root_cause_summary": root_cause,
+        "recommended_actions": actions,
+        "supporting_evidence": evidence,
+        "queries_executed": queries_executed,
+        "tokens_used": total_tokens
+    }
+
+
 @app.route('/api/alerts/history', methods=['GET'])
 def get_alert_history():
     """Get historical alert data for trend analysis."""
