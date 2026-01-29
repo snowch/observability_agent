@@ -1458,24 +1458,32 @@ def run_alert_investigation(executor, alert):
     system_prompt = """You are an expert SRE assistant performing root cause analysis.
 You have access to observability data via SQL queries (Trino/Presto dialect).
 
-Available tables:
-- traces_otel_analytic: start_time, trace_id, span_id, parent_span_id, service_name, span_name, span_kind, status_code, http_status, duration_ns, db_system
-- logs_otel_analytic: timestamp, service_name, severity_number, severity_text, body_text, trace_id, span_id
-- span_events_otel_analytic: timestamp, trace_id, span_id, service_name, span_name, event_name, exception_type, exception_message, exception_stacktrace
+Available tables and their EXACT columns (use ONLY these):
 
-TRINO SQL RULES:
-- Time filter: WHERE start_time > current_timestamp - INTERVAL '15' MINUTE
-- NO semicolons, NO square brackets, NO 'timestamp' for traces (use start_time)
+traces_otel_analytic (time column: start_time):
+  start_time, trace_id, span_id, parent_span_id, service_name, span_name,
+  span_kind, status_code, http_status, duration_ns, db_system
+
+logs_otel_analytic (time column: timestamp):
+  timestamp, service_name, severity_number, severity_text, body_text, trace_id, span_id
+
+span_events_otel_analytic (time column: timestamp):
+  timestamp, trace_id, span_id, service_name, span_name, event_name,
+  exception_type, exception_message, exception_stacktrace
+
+CRITICAL SQL RULES:
+- For traces: WHERE start_time > current_timestamp - INTERVAL '15' MINUTE
+- For logs/events: WHERE timestamp > current_timestamp - INTERVAL '15' MINUTE
+- NO 'attributes' column exists - do not use it
+- NO semicolons, NO square brackets
 - Interval: INTERVAL '15' MINUTE (quoted number)
 
 Be CONCISE. Output:
 ROOT CAUSE: <one sentence>
 EVIDENCE:
 - <finding 1>
-- <finding 2>
 RECOMMENDED ACTIONS:
-1. <action 1>
-2. <action 2>"""
+1. <action 1>"""
 
     tools = [{
         "name": "execute_sql",
