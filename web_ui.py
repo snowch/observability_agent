@@ -300,11 +300,15 @@ def chat_stream():
     }
     time_desc = time_descriptions.get(time_range, '15 minutes')
 
+    # Build SQL interval string
+    time_interval = time_range.replace('m', "' MINUTE").replace('h', "' HOUR")
+    sql_interval = f"INTERVAL '{time_interval}"
+
     def generate():
         conversation_history = get_or_create_session(session_id)
 
         # Add time context to the user message
-        message_with_context = f"[Time window: last {time_desc} (use INTERVAL '{time_range.replace('m', \"' MINUTE\").replace('h', \"' HOUR\")}' in queries)]\n\n{user_message}"
+        message_with_context = f"[Time window: last {time_desc} (use {sql_interval} in queries)]\n\n{user_message}"
         conversation_history.append({"role": "user", "content": message_with_context})
 
         # Keep history manageable
