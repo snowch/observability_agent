@@ -37,15 +37,25 @@ import time
 import uuid
 import signal
 import warnings
+import json
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass, field
 from typing import Dict, List, Any, Optional, Tuple
 from enum import Enum
+from collections import deque
 import statistics
 import math
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
+
+# Optional: Anthropic for LLM-powered investigations
+try:
+    import anthropic
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
+    print("[INFO] anthropic not available - LLM investigations disabled")
 
 try:
     from trino.dbapi import connect as trino_connect
@@ -115,6 +125,26 @@ class Config:
     )
     auto_resolve_minutes: int = field(
         default_factory=lambda: int(os.getenv("AUTO_RESOLVE_MINUTES", "30"))
+    )
+
+    # LLM Investigation settings
+    anthropic_api_key: str = field(
+        default_factory=lambda: os.getenv("ANTHROPIC_API_KEY")
+    )
+    investigation_model: str = field(
+        default_factory=lambda: os.getenv("INVESTIGATION_MODEL", "claude-3-5-haiku-20241022")
+    )
+    investigation_max_tokens: int = field(
+        default_factory=lambda: int(os.getenv("INVESTIGATION_MAX_TOKENS", "1000"))
+    )
+    max_investigations_per_hour: int = field(
+        default_factory=lambda: int(os.getenv("MAX_INVESTIGATIONS_PER_HOUR", "5"))
+    )
+    investigation_service_cooldown_minutes: int = field(
+        default_factory=lambda: int(os.getenv("INVESTIGATION_SERVICE_COOLDOWN_MINUTES", "30"))
+    )
+    investigate_critical_only: bool = field(
+        default_factory=lambda: os.getenv("INVESTIGATE_CRITICAL_ONLY", "false").lower() == "true"
     )
 
     def validate(self):
@@ -671,10 +701,11 @@ class AlertManager:
         """Generate unique key for alert deduplication."""
         return f"{service}:{alert_type}:{metric_type}"
 
-    def process_anomalies(self, anomalies: List[Dict]) -> Tuple[int, int]:
-        """Process detected anomalies and create/update alerts."""
+    def process_anomalies(self, anomalies: List[Dict]) -> Tuple[int, int, List[Dict]]:
+        """Process detected anomalies and create/update alerts. Returns (created, updated, new_alerts)."""
         created = 0
         updated = 0
+        new_alerts = []
 
         seen_keys = set()
 
@@ -693,7 +724,9 @@ class AlertManager:
                 # Check cooldown
                 if not self._in_cooldown(service, alert_type, metric_type):
                     # Create new alert
-                    self._create_alert(anomaly)
+                    alert_info = self._create_alert(anomaly)
+                    if alert_info:
+                        new_alerts.append(alert_info)
                     created += 1
 
         # Auto-resolve alerts that are no longer anomalous
@@ -702,7 +735,7 @@ class AlertManager:
         if created or updated or resolved:
             print(f"[Alerts] Created: {created}, Updated: {updated}, Auto-resolved: {resolved}")
 
-        return created, updated
+        return created, updated, new_alerts
 
     def _in_cooldown(self, service: str, alert_type: str, metric_type: str) -> bool:
         """Check if alert is in cooldown period after resolution."""
@@ -720,8 +753,8 @@ class AlertManager:
         results = self.executor.execute(sql)
         return len(results) > 0
 
-    def _create_alert(self, anomaly: Dict):
-        """Create a new alert."""
+    def _create_alert(self, anomaly: Dict) -> Optional[Dict]:
+        """Create a new alert and return alert info for investigation."""
         alert_id = str(uuid.uuid4())[:8]
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
@@ -749,14 +782,18 @@ class AlertManager:
 
         if self.executor.execute_write(sql):
             key = self._alert_key(service, alert_type, metric_type)
-            self.active_alerts[key] = {
+            alert_info = {
                 "alert_id": alert_id,
                 "service_name": service,
                 "alert_type": alert_type,
                 "metric_type": metric_type,
                 "severity": severity,
+                "description": description,
             }
+            self.active_alerts[key] = alert_info
             print(f"[Alert] CREATED [{severity.upper()}] {title}: {description}")
+            return alert_info
+        return None
 
     def _update_alert(self, key: str, anomaly: Dict):
         """Update an existing alert with new values."""
@@ -802,6 +839,280 @@ class AlertManager:
 
 
 # =============================================================================
+# Alert Investigator (LLM-powered root cause analysis)
+# =============================================================================
+
+INVESTIGATION_SYSTEM_PROMPT = """You are an expert SRE assistant performing automated root cause analysis for alerts.
+You have access to observability data via SQL queries. Analyze the alert and determine the root cause.
+
+Available tables:
+- traces_otel_analytic: Distributed traces with service_name, span_name, status_code, duration_ns, db_system
+- logs_otel_analytic: Application logs with service_name, severity_text, body_text
+- span_events_otel_analytic: Span events including exceptions with exception_type, exception_message
+- metrics_otel_analytic: Time-series metrics with metric_name, value_double
+
+Your analysis should be CONCISE (under 500 words). Focus on:
+1. What is the root cause?
+2. What evidence supports this?
+3. What actions should be taken?
+
+Output format:
+ROOT CAUSE: <one sentence summary>
+
+EVIDENCE:
+- <key finding 1>
+- <key finding 2>
+
+RECOMMENDED ACTIONS:
+1. <action 1>
+2. <action 2>
+"""
+
+class AlertInvestigator:
+    """LLM-powered automatic investigation of alerts."""
+
+    def __init__(self, executor: 'TrinoExecutor', config: Config):
+        self.executor = executor
+        self.config = config
+        self.client = None
+        self.enabled = False
+
+        # Rate limiting: track investigation timestamps
+        self.investigation_times: deque = deque(maxlen=100)
+        # Per-service cooldown: service -> last investigation time
+        self.service_last_investigated: Dict[str, datetime] = {}
+
+        if ANTHROPIC_AVAILABLE and config.anthropic_api_key:
+            self.client = anthropic.Anthropic(api_key=config.anthropic_api_key)
+            self.enabled = True
+            print(f"[Investigator] Enabled (model: {config.investigation_model}, max {config.max_investigations_per_hour}/hour)")
+        else:
+            print("[Investigator] Disabled (no ANTHROPIC_API_KEY)")
+
+        self.tools = [{
+            "name": "execute_sql",
+            "description": "Execute a SQL query against the observability database",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "sql": {
+                        "type": "string",
+                        "description": "The SQL query to execute"
+                    }
+                },
+                "required": ["sql"]
+            }
+        }]
+
+    def should_investigate(self, alert: Dict) -> bool:
+        """Check if we should investigate this alert (rate limits, cooldowns)."""
+        if not self.enabled:
+            return False
+
+        service = alert.get("service_name", "")
+        severity = alert.get("severity", "")
+
+        # Check if critical-only mode
+        if self.config.investigate_critical_only and severity != "critical":
+            return False
+
+        # Check hourly rate limit
+        now = datetime.now(timezone.utc)
+        hour_ago = now - timedelta(hours=1)
+
+        # Remove old timestamps
+        while self.investigation_times and self.investigation_times[0] < hour_ago:
+            self.investigation_times.popleft()
+
+        if len(self.investigation_times) >= self.config.max_investigations_per_hour:
+            print(f"[Investigator] Rate limit reached ({self.config.max_investigations_per_hour}/hour)")
+            return False
+
+        # Check per-service cooldown
+        if service in self.service_last_investigated:
+            cooldown_until = self.service_last_investigated[service] + timedelta(
+                minutes=self.config.investigation_service_cooldown_minutes
+            )
+            if now < cooldown_until:
+                remaining = (cooldown_until - now).seconds // 60
+                print(f"[Investigator] Service {service} in cooldown ({remaining}m remaining)")
+                return False
+
+        return True
+
+    def investigate(self, alert: Dict) -> Optional[Dict]:
+        """Investigate an alert and return findings."""
+        if not self.should_investigate(alert):
+            return None
+
+        service = alert.get("service_name", "")
+        alert_type = alert.get("alert_type", "")
+        alert_id = alert.get("alert_id", "")
+        description = alert.get("description", "")
+
+        print(f"[Investigator] Starting investigation for {service} - {alert_type}")
+
+        # Record investigation attempt
+        now = datetime.now(timezone.utc)
+        self.investigation_times.append(now)
+        self.service_last_investigated[service] = now
+
+        # Build investigation prompt
+        user_prompt = f"""Investigate this alert:
+
+Service: {service}
+Alert Type: {alert_type}
+Description: {description}
+
+Find the root cause by querying the observability data. Focus on the last 15 minutes.
+Start by checking for errors, exceptions, and anomalies in this service and its dependencies."""
+
+        try:
+            # Run investigation with tool use
+            messages = [{"role": "user", "content": user_prompt}]
+            queries_executed = 0
+            total_tokens = 0
+
+            for _ in range(5):  # Max 5 iterations
+                response = self.client.messages.create(
+                    model=self.config.investigation_model,
+                    max_tokens=self.config.investigation_max_tokens,
+                    system=INVESTIGATION_SYSTEM_PROMPT,
+                    tools=self.tools,
+                    messages=messages
+                )
+
+                total_tokens += response.usage.input_tokens + response.usage.output_tokens
+
+                # Check for tool use
+                tool_calls = [b for b in response.content if b.type == "tool_use"]
+
+                if not tool_calls:
+                    # No more tool calls, extract final response
+                    break
+
+                # Process tool calls
+                messages.append({"role": "assistant", "content": response.content})
+
+                tool_results = []
+                for tool_call in tool_calls:
+                    if tool_call.name == "execute_sql":
+                        sql = tool_call.input.get("sql", "")
+                        queries_executed += 1
+
+                        # Execute query
+                        result = self.executor.execute(sql)
+                        result_str = json.dumps(result[:20] if len(result) > 20 else result, default=str)
+
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_call.id,
+                            "content": result_str
+                        })
+
+                messages.append({"role": "user", "content": tool_results})
+
+            # Extract final analysis
+            analysis = self._extract_text(response)
+
+            # Parse into structured format
+            root_cause, actions, evidence = self._parse_analysis(analysis)
+
+            # Store investigation
+            investigation_id = str(uuid.uuid4())[:8]
+            self._store_investigation(
+                investigation_id=investigation_id,
+                alert_id=alert_id,
+                service=service,
+                alert_type=alert_type,
+                root_cause=root_cause,
+                actions=actions,
+                evidence=evidence,
+                queries_executed=queries_executed,
+                tokens_used=total_tokens
+            )
+
+            print(f"[Investigator] Completed: {root_cause[:80]}...")
+
+            return {
+                "investigation_id": investigation_id,
+                "root_cause_summary": root_cause,
+                "recommended_actions": actions,
+                "supporting_evidence": evidence,
+                "queries_executed": queries_executed,
+                "tokens_used": total_tokens
+            }
+
+        except Exception as e:
+            print(f"[Investigator] Error: {e}")
+            return None
+
+    def _extract_text(self, response) -> str:
+        """Extract text content from response."""
+        text_parts = []
+        for block in response.content:
+            if hasattr(block, 'text'):
+                text_parts.append(block.text)
+        return "\n".join(text_parts)
+
+    def _parse_analysis(self, analysis: str) -> Tuple[str, str, str]:
+        """Parse the analysis into structured components."""
+        root_cause = ""
+        actions = ""
+        evidence = ""
+
+        lines = analysis.split("\n")
+        current_section = None
+
+        for line in lines:
+            line_upper = line.upper().strip()
+            if line_upper.startswith("ROOT CAUSE:"):
+                current_section = "root_cause"
+                root_cause = line.split(":", 1)[1].strip() if ":" in line else ""
+            elif line_upper.startswith("EVIDENCE:") or line_upper.startswith("SUPPORTING EVIDENCE:"):
+                current_section = "evidence"
+            elif line_upper.startswith("RECOMMENDED ACTIONS:") or line_upper.startswith("ACTIONS:"):
+                current_section = "actions"
+            elif current_section == "root_cause" and line.strip() and not root_cause:
+                root_cause = line.strip()
+            elif current_section == "evidence":
+                evidence += line + "\n"
+            elif current_section == "actions":
+                actions += line + "\n"
+
+        # Fallback: use first sentence as root cause if not parsed
+        if not root_cause and analysis:
+            root_cause = analysis.split(".")[0][:200]
+
+        return root_cause.strip(), actions.strip(), evidence.strip()
+
+    def _store_investigation(
+        self, investigation_id: str, alert_id: str, service: str, alert_type: str,
+        root_cause: str, actions: str, evidence: str, queries_executed: int, tokens_used: int
+    ):
+        """Store investigation results in database."""
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+        # Escape single quotes for SQL
+        root_cause_escaped = root_cause.replace("'", "''")[:2000]
+        actions_escaped = actions.replace("'", "''")[:2000]
+        evidence_escaped = evidence.replace("'", "''")[:4000]
+
+        sql = f"""
+            INSERT INTO alert_investigations (
+                investigation_id, alert_id, investigated_at, service_name, alert_type,
+                model_used, root_cause_summary, recommended_actions, supporting_evidence,
+                queries_executed, tokens_used
+            ) VALUES (
+                '{investigation_id}', '{alert_id}', TIMESTAMP '{now}', '{service}', '{alert_type}',
+                '{self.config.investigation_model}', '{root_cause_escaped}', '{actions_escaped}', '{evidence_escaped}',
+                {queries_executed}, {tokens_used}
+            )
+        """
+        self.executor.execute_write(sql)
+
+
+# =============================================================================
 # Main Service
 # =============================================================================
 
@@ -814,6 +1125,7 @@ class PredictiveAlertsService:
         self.baseline_computer = BaselineComputer(self.executor, config)
         self.anomaly_detector = AnomalyDetector(self.executor, config, self.baseline_computer)
         self.alert_manager = AlertManager(self.executor, config)
+        self.investigator = AlertInvestigator(self.executor, config)
 
         self.running = True
         self.last_baseline_update = 0
@@ -856,6 +1168,13 @@ class PredictiveAlertsService:
         print(f"  Error rate warning: {self.config.error_rate_warning:.0%}")
         print(f"  Error rate critical: {self.config.error_rate_critical:.0%}")
         print(f"  sklearn available: {SKLEARN_AVAILABLE}")
+        print(f"\nInvestigation settings:")
+        print(f"  LLM investigations: {'enabled' if self.investigator.enabled else 'disabled'}")
+        if self.investigator.enabled:
+            print(f"  Model: {self.config.investigation_model}")
+            print(f"  Max per hour: {self.config.max_investigations_per_hour}")
+            print(f"  Service cooldown: {self.config.investigation_service_cooldown_minutes}m")
+            print(f"  Critical only: {self.config.investigate_critical_only}")
         print()
 
         # Initial baseline computation
@@ -879,11 +1198,13 @@ class PredictiveAlertsService:
                 anomalies = self.anomaly_detector.detect_all()
 
                 # Process anomalies and manage alerts
-                if anomalies:
-                    self.alert_manager.process_anomalies(anomalies)
-                else:
-                    # Still need to check for auto-resolution
-                    self.alert_manager.process_anomalies([])
+                created, updated, new_alerts = self.alert_manager.process_anomalies(
+                    anomalies if anomalies else []
+                )
+
+                # Investigate new alerts (with rate limiting)
+                for alert in new_alerts:
+                    self.investigator.investigate(alert)
 
                 # Sleep for remaining interval time
                 elapsed = time.time() - loop_start

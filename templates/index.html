@@ -282,6 +282,13 @@
             line-height: 1.4;
         }
 
+        .alert-root-cause {
+            font-size: 11px;
+            color: var(--accent-primary);
+            line-height: 1.4;
+            font-weight: 500;
+        }
+
         .alert-summary {
             display: flex;
             gap: 12px;
@@ -3323,15 +3330,19 @@
                     alertsList.innerHTML = data.alerts.map(alert => {
                         const severity = alert.severity || 'info';
                         const timeAgo = formatTimeAgo(alert.created_at);
+                        const hasInvestigation = alert.root_cause_summary;
 
                         return `
                             <div class="alert-item alert-${severity}" onclick="investigateAlert('${escapeHtml(alert.service_name)}', '${escapeHtml(alert.alert_type)}')">
                                 <div class="alert-header">
                                     <span class="alert-severity ${severity}">${severity}</span>
-                                    <span class="alert-time">${timeAgo}</span>
+                                    <span class="alert-time">${timeAgo}${hasInvestigation ? ' • analyzed' : ''}</span>
                                 </div>
                                 <div class="alert-title">${escapeHtml(alert.title || alert.alert_type)}</div>
-                                <div class="alert-description">${escapeHtml(alert.description || '')}</div>
+                                ${hasInvestigation
+                                    ? `<div class="alert-root-cause">${escapeHtml(alert.root_cause_summary)}</div>`
+                                    : `<div class="alert-description">${escapeHtml(alert.description || '')}</div>`
+                                }
                             </div>
                         `;
                     }).join('');

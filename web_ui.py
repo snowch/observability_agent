@@ -1298,29 +1298,34 @@ def get_alerts():
 
     where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
 
-    # Get alerts
+    # Get alerts with investigations
     alerts_query = f"""
     SELECT
-        alert_id,
-        created_at,
-        updated_at,
-        service_name,
-        alert_type,
-        severity,
-        title,
-        description,
-        metric_type,
-        current_value,
-        baseline_value,
-        z_score,
-        status,
-        resolved_at,
-        auto_resolved
-    FROM alerts
-    {where_clause}
+        a.alert_id,
+        a.created_at,
+        a.updated_at,
+        a.service_name,
+        a.alert_type,
+        a.severity,
+        a.title,
+        a.description,
+        a.metric_type,
+        a.current_value,
+        a.baseline_value,
+        a.z_score,
+        a.status,
+        a.resolved_at,
+        a.auto_resolved,
+        i.investigation_id,
+        i.investigated_at,
+        i.root_cause_summary,
+        i.recommended_actions
+    FROM alerts a
+    LEFT JOIN alert_investigations i ON a.alert_id = i.alert_id
+    {where_clause.replace('status', 'a.status').replace('severity', 'a.severity').replace('service_name', 'a.service_name') if where_clause else ''}
     ORDER BY
-        CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
-        created_at DESC
+        CASE a.severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
+        a.created_at DESC
     LIMIT {limit}
     """
 
