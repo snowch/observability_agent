@@ -57,32 +57,39 @@ These inject failures at the application level, producing rich telemetry:
 ### PostgreSQL Degradation
 
 ```bash
-# Slow queries (starts background load generator that consumes PostgreSQL resources)
-# This creates real contention, slowing down ALL queries including the application's
+# Slow queries (injects latency via TCP proxy)
 ./scripts/simulate_failure.sh degrade postgres slow
+
+# Custom latency (default is 150ms)
+PG_PROXY_LATENCY_MS=300 ./scripts/simulate_failure.sh degrade postgres slow
 
 # Memory pressure (reduces work_mem to force disk-based sorts)
 ./scripts/simulate_failure.sh degrade postgres memory
 
-# Check status (shows load generator state and current performance settings)
+# Check status (shows proxy state and measures actual query latency)
 ./scripts/simulate_failure.sh status postgres
 
-# Restore to normal (stops load generator and resets all settings)
+# Restore to normal (removes proxy, restores direct connection)
 ./scripts/simulate_failure.sh restore postgres
 ```
 
 **How `degrade postgres slow` works:**
 
-Primary method: **Network latency injection** using `tc` (traffic control)
-- Adds 150ms ± 50ms network delay to ALL PostgreSQL traffic
-- This affects ALL queries from ALL services, guaranteeing visible latency increase
-- Requires the container to have NET_ADMIN capability
+Uses a **TCP proxy** (`alpine/socat`) to intercept PostgreSQL connections:
 
-Fallback method (if tc unavailable): **Lock contention**
-- Creates a lock target table and runs multiple processes holding locks
-- Causes contention but may be less effective
+1. Disconnects PostgreSQL from the Docker network
+2. Reconnects it with alias `postgresql-direct`
+3. Starts a `socat` proxy container with alias `postgresql` (takes over the DNS name)
+4. Adds `tc netem` latency on the proxy container (not PostgreSQL itself)
+5. All services now connect through: **service → proxy (150ms delay) → postgresql**
 
-Run `restore postgres` to remove the latency injection.
+Benefits over `tc` on PostgreSQL directly:
+- `docker exec` into PostgreSQL still works normally
+- `docker compose` commands don't hang
+- Latency is configurable via `PG_PROXY_LATENCY_MS` env var
+- PostgreSQL container is untouched
+
+Run `restore postgres` to remove the proxy and restore direct connections.
 
 ### otel-demo API Injection
 
