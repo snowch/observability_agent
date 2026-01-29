@@ -2916,32 +2916,49 @@
         function formatMarkdown(text) {
             if (!text) return '';
             text = escapeHtml(text);
+
+            // Code blocks first (preserve content)
+            text = text.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
+            text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
+
             // Headers
             text = text.replace(/^### (.*$)/gm, '<h3>$1</h3>');
             text = text.replace(/^## (.*$)/gm, '<h2>$1</h2>');
             text = text.replace(/^# (.*$)/gm, '<h1>$1</h1>');
+
             // Bold
             text = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-            // Code blocks
-            text = text.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
-            text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
-            // Numbered lists (1. 2. 3. etc) - handle with/without leading spaces
-            text = text.replace(/^[ \t]*(\d+)[\.\)] (.*$)/gm, '<oli>$2</oli>');
-            // Lettered lists (a. b. c. or a) b) c))
-            text = text.replace(/^[ \t]*[a-z][\.\)] (.*$)/gm, '<oli>$1</oli>');
-            // Bullet lists - handle -, *, • with optional leading spaces
-            text = text.replace(/^[ \t]*[\-\*•] (.*$)/gm, '<uli>$1</uli>');
-            // Wrap consecutive oli elements in ol
-            text = text.replace(/((?:<oli>.*?<\/oli>\s*)+)/g, '<ol>$1</ol>');
-            text = text.replace(/<oli>/g, '<li>').replace(/<\/oli>/g, '</li>');
-            // Wrap consecutive uli elements in ul
-            text = text.replace(/((?:<uli>.*?<\/uli>\s*)+)/g, '<ul>$1</ul>');
-            text = text.replace(/<uli>/g, '<li>').replace(/<\/uli>/g, '</li>');
-            // Paragraphs - handle single and double newlines
+
+            // Normalize multiple newlines between list items to single newline
+            text = text.replace(/(\n[ \t]*[-*•])/g, '\n$1');
+            text = text.replace(/(\n[ \t]*\d+[\.\)])/g, '\n$1');
+
+            // Lists - convert to temp markers, strip extra whitespace
+            text = text.replace(/^[ \t]*(\d+)[\.\)] (.*$)/gm, '{{OLI}}$2{{/OLI}}');
+            text = text.replace(/^[ \t]*[a-z][\.\)] (.*$)/gm, '{{OLI}}$1{{/OLI}}');
+            text = text.replace(/^[ \t]*[-*•] (.*$)/gm, '{{ULI}}$1{{/ULI}}');
+
+            // Wrap consecutive list items (handling newlines between them)
+            text = text.replace(/((?:\{\{OLI\}\}.*?\{\{\/OLI\}\}\n*)+)/g, '<ol>$1</ol>');
+            text = text.replace(/((?:\{\{ULI\}\}.*?\{\{\/ULI\}\}\n*)+)/g, '<ul>$1</ul>');
+
+            // Convert markers to actual tags
+            text = text.replace(/\{\{OLI\}\}/g, '<li>').replace(/\{\{\/OLI\}\}/g, '</li>');
+            text = text.replace(/\{\{ULI\}\}/g, '<li>').replace(/\{\{\/ULI\}\}/g, '</li>');
+
+            // Clean whitespace inside lists
+            text = text.replace(/<\/li>\s+<li>/g, '</li><li>');
+            text = text.replace(/<\/li>\s+<\/ol>/g, '</li></ol>');
+            text = text.replace(/<\/li>\s+<\/ul>/g, '</li></ul>');
+            text = text.replace(/<ol>\s+<li>/g, '<ol><li>');
+            text = text.replace(/<ul>\s+<li>/g, '<ul><li>');
+
+            // Paragraphs - only outside of lists
             text = text.replace(/\n\n+/g, '</p><p>');
             text = text.replace(/\n/g, '<br>');
             text = '<p>' + text + '</p>';
-            // Clean up empty tags and nesting issues
+
+            // Clean up
             text = text.replace(/<p><\/p>/g, '');
             text = text.replace(/<p>(<h[123]>)/g, '$1');
             text = text.replace(/(<\/h[123]>)<\/p>/g, '$1');
@@ -2952,12 +2969,6 @@
             text = text.replace(/<p>\s*<\/p>/g, '');
             text = text.replace(/<br>\s*(<[ou]l>)/g, '$1');
             text = text.replace(/(<\/[ou]l>)\s*<br>/g, '$1');
-            // Remove <br> between and around list items
-            text = text.replace(/<\/li>\s*(<br>\s*)+<li>/g, '</li><li>');
-            text = text.replace(/<\/li>\s*(<br>\s*)+<\/ul>/g, '</li></ul>');
-            text = text.replace(/<\/li>\s*(<br>\s*)+<\/ol>/g, '</li></ol>');
-            text = text.replace(/<ul>\s*(<br>\s*)+<li>/g, '<ul><li>');
-            text = text.replace(/<ol>\s*(<br>\s*)+<li>/g, '<ol><li>');
             text = text.replace(/<p><br>/g, '<p>');
             text = text.replace(/<br><\/p>/g, '</p>');
             return text;
