@@ -92,42 +92,40 @@ postgres_unblock() {
 postgres_status() {
     log_info "Checking PostgreSQL status..."
 
-    # First check if the container is running at all
-    CONTAINER_RUNNING=$(docker compose ps postgresql --format '{{.State}}' 2>/dev/null | grep -i running)
+    # Check if the container is running using docker directly (faster than docker compose)
+    CONTAINER_ID=$(timeout 5 docker ps --filter "name=postgresql" --filter "status=running" -q 2>/dev/null)
 
-    if [ -z "$CONTAINER_RUNNING" ]; then
+    if [ -z "$CONTAINER_ID" ]; then
         echo -e "PostgreSQL: ${RED}DOWN${NC} (container not running)"
         return
     fi
 
-    # Container is running - check if we can query it (with longer timeout)
-    if timeout 30 docker compose exec -T postgresql psql -U root -c "SELECT 1;" > /dev/null 2>&1; then
-        echo -e "PostgreSQL: ${GREEN}RUNNING${NC}"
+    echo -e "PostgreSQL: ${GREEN}CONTAINER RUNNING${NC}"
+
+    # Check if we can actually query it (with timeout)
+    if timeout 10 docker compose exec -T postgresql psql -U root -c "SELECT 1;" > /dev/null 2>&1; then
+        echo -e "Queries: ${GREEN}RESPONDING${NC}"
     else
-        echo -e "PostgreSQL: ${YELLOW}RUNNING (SLOW)${NC} - queries taking >30s"
+        echo -e "Queries: ${YELLOW}SLOW OR UNRESPONSIVE${NC}"
     fi
 
     # Check for network latency injection
-    NETEM_ACTIVE=$(docker compose exec -T --user root postgresql sh -c 'tc qdisc show dev eth0 2>/dev/null | grep -c netem' 2>/dev/null || echo "0")
-    if [ "$NETEM_ACTIVE" != "0" ]; then
-        DELAY_INFO=$(docker compose exec -T --user root postgresql sh -c 'tc qdisc show dev eth0 2>/dev/null | grep -o "delay [0-9.]*ms"' 2>/dev/null || echo "delay unknown")
-        echo -e "Network latency: ${YELLOW}INJECTED${NC} ($DELAY_INFO)"
+    NETEM_ACTIVE=$(timeout 5 docker exec "$CONTAINER_ID" sh -c 'tc qdisc show dev eth0 2>/dev/null | grep netem' 2>/dev/null)
+    if [ -n "$NETEM_ACTIVE" ]; then
+        echo -e "Network latency: ${YELLOW}INJECTED${NC} ($NETEM_ACTIVE)"
     else
         echo -e "Network latency: ${GREEN}NORMAL${NC}"
     fi
 
     # Check for background load generator process
     MARKER_FILE="/tmp/postgres_load_generator.pid"
-    LOAD_GEN_RUNNING="no"
     if [ -f "$MARKER_FILE" ]; then
         LOAD_GEN_PID=$(cat "$MARKER_FILE")
         if kill -0 "$LOAD_GEN_PID" 2>/dev/null; then
-            LOAD_GEN_RUNNING="yes"
+            echo -e "Load generator: ${YELLOW}ACTIVE${NC} (PID: $LOAD_GEN_PID)"
+        else
+            echo -e "Load generator: ${GREEN}INACTIVE${NC} (stale PID file)"
         fi
-    fi
-
-    if [ "$LOAD_GEN_RUNNING" = "yes" ]; then
-        echo -e "Load generator: ${YELLOW}ACTIVE${NC} (PID: $LOAD_GEN_PID)"
     else
         echo -e "Load generator: ${GREEN}INACTIVE${NC}"
     fi
@@ -155,7 +153,13 @@ postgres_degrade_slow() {
 
     # Use tc (traffic control) to add latency to PostgreSQL container's network
     # This adds 100-200ms delay to ALL network traffic to/from PostgreSQL
-    docker compose exec -T --user root postgresql sh -c '
+    CONTAINER_ID=$(docker ps --filter "name=postgresql" --filter "status=running" -q 2>/dev/null)
+    if [ -z "$CONTAINER_ID" ]; then
+        log_error "PostgreSQL container is not running"
+        exit 1
+    fi
+
+    timeout 60 docker exec --user root "$CONTAINER_ID" sh -c '
         # Install iproute2 if not present (for tc command)
         apt-get update -qq && apt-get install -y -qq iproute2 2>/dev/null || apk add --quiet iproute2 2>/dev/null || true
 
@@ -273,10 +277,13 @@ postgres_restore() {
 
     # Remove network latency injection
     log_info "Removing network latency injection..."
-    docker compose exec -T --user root postgresql sh -c '
-        tc qdisc del dev eth0 root 2>/dev/null || true
-        echo "Network latency removed"
-    ' 2>/dev/null || true
+    CONTAINER_ID=$(docker ps --filter "name=postgresql" -q 2>/dev/null)
+    if [ -n "$CONTAINER_ID" ]; then
+        timeout 10 docker exec --user root "$CONTAINER_ID" sh -c '
+            tc qdisc del dev eth0 root 2>/dev/null || true
+            echo "Network latency removed"
+        ' 2>/dev/null || true
+    fi
 
     docker compose exec -T postgresql psql -U root -d "${POSTGRES_DB:-otel}" <<'EOF'
 -- Remove load generator functions and tables
