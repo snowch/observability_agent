@@ -302,18 +302,17 @@ class AdaptiveThresholdManager:
                 alert_type,
                 metric_type,
                 COUNT(*) as total_alerts,
-                SUM(CASE WHEN auto_resolved = true THEN 1 ELSE 0 END) as auto_resolved_count,
-                AVG(CASE
-                    WHEN resolved_at IS NOT NULL AND created_at IS NOT NULL
-                    THEN CAST(resolved_at AS DOUBLE) - CAST(created_at AS DOUBLE)
-                    ELSE NULL
-                END) as avg_resolution_time_ns
+                SUM(CASE WHEN auto_resolved = true THEN 1 ELSE 0 END) as auto_resolved_count
             FROM alerts
             WHERE created_at > current_timestamp - interval '7' day
             GROUP BY alert_type, metric_type
             HAVING COUNT(*) >= 5
         """
-        results = executor.execute(sql)
+        try:
+            results = executor.execute(sql)
+        except Exception as e:
+            print(f"[Adaptive] Could not analyze alert history: {e}")
+            return
 
         for row in results:
             alert_type = row.get("alert_type", "")
