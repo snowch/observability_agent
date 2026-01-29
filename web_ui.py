@@ -1319,7 +1319,11 @@ def get_alerts():
         i.investigation_id,
         i.investigated_at,
         i.root_cause_summary,
-        i.recommended_actions
+        i.recommended_actions,
+        i.supporting_evidence,
+        i.queries_executed,
+        i.tokens_used,
+        i.model_used
     FROM alerts a
     LEFT JOIN alert_investigations i ON a.alert_id = i.alert_id
     {where_clause.replace('status', 'a.status').replace('severity', 'a.severity').replace('service_name', 'a.service_name') if where_clause else ''}
