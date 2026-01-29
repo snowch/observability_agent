@@ -41,6 +41,9 @@ except ImportError:
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-3-5-haiku-20241022")
 
+# Investigation config (mirrors predictive_alerts.py settings)
+INVESTIGATE_CRITICAL_ONLY = os.getenv("INVESTIGATE_CRITICAL_ONLY", "false").lower() == "true"
+
 TRINO_HOST = os.getenv("TRINO_HOST")
 TRINO_PORT = int(os.getenv("TRINO_PORT", "443"))
 TRINO_USER = os.getenv("TRINO_USER", "admin")
@@ -1260,6 +1263,14 @@ def host_services(host_name):
 # =============================================================================
 # Alerts API
 # =============================================================================
+
+@app.route('/api/alerts/config', methods=['GET'])
+def get_alerts_config():
+    """Get investigation configuration for display in UI."""
+    return jsonify({
+        'investigate_critical_only': INVESTIGATE_CRITICAL_ONLY
+    })
+
 
 @app.route('/api/alerts', methods=['GET'])
 def get_alerts():
