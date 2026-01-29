@@ -284,13 +284,28 @@ def chat_stream():
     data = request.json
     user_message = data.get('message', '')
     session_id = data.get('session_id', 'default')
+    time_range = data.get('time_range', '15m')
 
     if not user_message:
         return jsonify({'error': 'No message provided'}), 400
 
+    # Parse time range for context
+    time_descriptions = {
+        '5m': '5 minutes',
+        '15m': '15 minutes',
+        '30m': '30 minutes',
+        '1h': '1 hour',
+        '6h': '6 hours',
+        '24h': '24 hours'
+    }
+    time_desc = time_descriptions.get(time_range, '15 minutes')
+
     def generate():
         conversation_history = get_or_create_session(session_id)
-        conversation_history.append({"role": "user", "content": user_message})
+
+        # Add time context to the user message
+        message_with_context = f"[Time window: last {time_desc} (use INTERVAL '{time_range.replace('m', \"' MINUTE\").replace('h', \"' HOUR\")}' in queries)]\n\n{user_message}"
+        conversation_history.append({"role": "user", "content": message_with_context})
 
         # Keep history manageable
         if len(conversation_history) > 20:
