@@ -312,6 +312,69 @@
         .alert-summary-count.critical { color: var(--accent-error); }
         .alert-summary-count.warning { color: var(--accent-warning); }
 
+        /* Activity log styles */
+        .activity-list {
+            max-height: 180px;
+            overflow-y: auto;
+        }
+
+        .activity-event {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            padding: 8px 10px;
+            margin-bottom: 4px;
+            border-radius: 6px;
+            background: var(--bg-tertiary);
+            font-size: 11px;
+        }
+
+        .activity-icon {
+            flex-shrink: 0;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+        }
+
+        .activity-icon.created {
+            background: rgba(239, 68, 68, 0.2);
+            color: var(--accent-error);
+        }
+
+        .activity-icon.auto_resolved {
+            background: rgba(34, 197, 94, 0.2);
+            color: var(--accent-success);
+        }
+
+        .activity-icon.resolved {
+            background: rgba(59, 130, 246, 0.2);
+            color: var(--accent-primary);
+        }
+
+        .activity-content {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .activity-text {
+            color: var(--text-secondary);
+            line-height: 1.3;
+        }
+
+        .activity-text strong {
+            color: var(--text-primary);
+        }
+
+        .activity-time {
+            color: var(--text-muted);
+            font-size: 10px;
+            margin-top: 2px;
+        }
+
         .error-item {
             padding: 12px;
             background: rgba(239, 68, 68, 0.08);
@@ -1977,6 +2040,15 @@
 
         <div class="sidebar-section">
             <div class="section-header">
+                <span class="section-title">Alert Activity</span>
+            </div>
+            <div id="activity-list" class="activity-list">
+                <div class="empty-state">Loading...</div>
+            </div>
+        </div>
+
+        <div class="sidebar-section">
+            <div class="section-header">
                 <span class="section-title">Services</span>
                 <select class="time-selector" id="services-time-selector" onchange="refreshStatus()">
                     <option value="1m">1m</option>
@@ -3291,8 +3363,9 @@
 
                 document.getElementById('last-updated').textContent = new Date().toLocaleTimeString();
 
-                // Also refresh alerts
+                // Also refresh alerts and activity
                 await refreshAlerts();
+                await refreshActivity();
 
             } catch (error) {
                 console.error('Failed to refresh status:', error);
@@ -3325,15 +3398,21 @@
                     alertsBadge.style.display = 'none';
                 }
 
-                // Update alerts list
+                // Update alerts list and cache for investigation lookup
                 if (data.alerts && data.alerts.length > 0) {
+                    // Cache alerts by ID for investigation lookup
+                    window.alertsCache = {};
+                    data.alerts.forEach(alert => {
+                        window.alertsCache[alert.alert_id] = alert;
+                    });
+
                     alertsList.innerHTML = data.alerts.map(alert => {
                         const severity = alert.severity || 'info';
                         const timeAgo = formatTimeAgo(alert.created_at);
                         const hasInvestigation = alert.root_cause_summary;
 
                         return `
-                            <div class="alert-item alert-${severity}" onclick="investigateAlert('${escapeHtml(alert.service_name)}', '${escapeHtml(alert.alert_type)}')">
+                            <div class="alert-item alert-${severity}" onclick="investigateAlert('${escapeHtml(alert.alert_id)}')">
                                 <div class="alert-header">
                                     <span class="alert-severity ${severity}">${severity}</span>
                                     <span class="alert-time">${timeAgo}${hasInvestigation ? ' • analyzed' : ''}</span>
@@ -3373,11 +3452,84 @@
             return `${Math.floor(diffHours / 24)}d ago`;
         }
 
-        function investigateAlert(serviceName, alertType) {
-            // Set a prompt to investigate the alert
-            const prompt = `Investigate the ${alertType.replace(/_/g, ' ')} alert for ${serviceName}. What's causing this issue?`;
+        function investigateAlert(alertId) {
+            // Look up alert from cache
+            const alert = window.alertsCache ? window.alertsCache[alertId] : null;
+
+            if (!alert) {
+                // Fallback if alert not found
+                setPrompt(`Investigate alert ${alertId}. What's causing this issue?`);
+                sendMessage();
+                return;
+            }
+
+            const serviceName = alert.service_name;
+            const alertType = (alert.alert_type || '').replace(/_/g, ' ');
+            const hasInvestigation = alert.root_cause_summary;
+
+            let prompt;
+            if (hasInvestigation) {
+                // Include the saved investigation results in context
+                prompt = `I'm looking at a ${alertType} alert for ${serviceName}.
+
+**Automated Analysis Found:**
+${alert.root_cause_summary}
+
+${alert.recommended_actions ? `**Recommended Actions:**
+${alert.recommended_actions}` : ''}
+
+Can you help me understand this issue further or suggest next steps based on this analysis?`;
+            } else {
+                // No investigation yet - ask for fresh investigation
+                prompt = `Investigate the ${alertType} alert for ${serviceName}. What's causing this issue?`;
+            }
+
             setPrompt(prompt);
             sendMessage();
+        }
+
+        async function refreshActivity() {
+            try {
+                const response = await fetch('/api/alerts/activity?minutes=60&limit=15');
+                const data = await response.json();
+                const activityList = document.getElementById('activity-list');
+
+                if (data.events && data.events.length > 0) {
+                    activityList.innerHTML = data.events.map(event => {
+                        const eventType = event.event_type;
+                        const timeAgo = formatTimeAgo(event.event_time);
+                        const service = escapeHtml(event.service_name || 'unknown');
+                        const alertType = (event.alert_type || '').replace(/_/g, ' ');
+
+                        let icon, text;
+                        if (eventType === 'created') {
+                            icon = '!';
+                            text = `<strong>${service}</strong> ${alertType}`;
+                        } else if (eventType === 'auto_resolved') {
+                            icon = '✓';
+                            text = `<strong>${service}</strong> ${alertType} auto-resolved`;
+                        } else {
+                            icon = '✓';
+                            text = `<strong>${service}</strong> ${alertType} resolved`;
+                        }
+
+                        return `
+                            <div class="activity-event">
+                                <div class="activity-icon ${eventType}">${icon}</div>
+                                <div class="activity-content">
+                                    <div class="activity-text">${text}</div>
+                                    <div class="activity-time">${timeAgo}</div>
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+                } else {
+                    activityList.innerHTML = '<div class="empty-state">No recent activity</div>';
+                }
+            } catch (error) {
+                console.error('Failed to refresh activity:', error);
+                document.getElementById('activity-list').innerHTML = '<div class="empty-state">Activity unavailable</div>';
+            }
         }
 
         async function openServiceModal(serviceName) {
