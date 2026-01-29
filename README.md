@@ -88,6 +88,95 @@ Then open http://localhost:5000 in your browser.
 - Database status monitoring
 - Recent errors feed
 - Query result visualization
+- Predictive alerts panel (see below)
+
+## Predictive Maintenance Alerts
+
+An automated service that monitors telemetry data and generates predictive alerts for potential issues before they become critical failures.
+
+### Features
+
+- **Fully automated** - no user input required, runs continuously in the background
+- **Self-learning baselines** - computes statistical baselines from historical data
+- **Multiple detection methods**:
+  - Z-score anomaly detection for error rates, latency, throughput
+  - Service down detection (no telemetry for 1+ hour)
+  - Configurable thresholds for warning/critical severity
+- **Auto-resolution** - alerts automatically resolve when conditions normalize
+- **Web UI integration** - alerts panel in sidebar, click to investigate
+
+### Alert Types
+
+| Alert Type | Description |
+|------------|-------------|
+| `error_spike` | Error rate exceeds baseline or threshold |
+| `latency_degradation` | P95 latency significantly above baseline |
+| `throughput_drop` | Request volume dropped significantly |
+| `service_down` | No telemetry received for extended period |
+
+### Setup
+
+The service requires the same Trino connection as the diagnostic chat:
+
+```bash
+export TRINO_HOST=trino.example.com
+export TRINO_PORT=443
+export TRINO_USER=your_user
+export TRINO_PASSWORD=your_password
+export TRINO_CATALOG=vast
+export TRINO_SCHEMA=otel
+```
+
+### Running the Service
+
+```bash
+python predictive_alerts.py
+```
+
+Run alongside `otel_ingester.py` using nohup, screen, or tmux for production use.
+
+### Configuration
+
+All settings are configurable via environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DETECTION_INTERVAL` | 60 | Seconds between anomaly detection runs |
+| `BASELINE_INTERVAL` | 3600 | Seconds between baseline recomputation |
+| `BASELINE_WINDOW_HOURS` | 24 | Hours of historical data for baselines |
+| `ANOMALY_THRESHOLD` | 3.0 | Z-score threshold for anomaly detection |
+| `ERROR_RATE_WARNING` | 0.05 | Error rate (5%) that triggers warning |
+| `ERROR_RATE_CRITICAL` | 0.20 | Error rate (20%) that triggers critical |
+| `MIN_SAMPLES_FOR_BASELINE` | 10 | Minimum data points required for baseline |
+| `ALERT_COOLDOWN_MINUTES` | 15 | Cooldown after resolution before re-alerting |
+
+### Database Tables
+
+The service creates/uses three tables for storing state:
+
+- `service_baselines` - Computed statistical baselines per service/metric
+- `anomaly_scores` - Historical anomaly detection results
+- `alerts` - Active and resolved alerts
+
+Create tables using the DDL in `ddl.sql`.
+
+### Web UI Integration
+
+When running, alerts appear in the sidebar:
+- Badge shows count of active alerts (color indicates severity)
+- Click any alert to automatically investigate via diagnostic chat
+- Alerts auto-refresh with the rest of the dashboard
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/alerts` | GET | List alerts (filter by status, severity, service) |
+| `/api/alerts/<id>/acknowledge` | POST | Acknowledge an alert |
+| `/api/alerts/<id>/resolve` | POST | Manually resolve an alert |
+| `/api/alerts/history` | GET | Historical alert trends |
+| `/api/baselines` | GET | Current service baselines |
+| `/api/anomalies` | GET | Recent anomaly scores |
 
 ## Testing with Simulated Failures
 
