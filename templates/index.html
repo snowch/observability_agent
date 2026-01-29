@@ -755,6 +755,17 @@
             border: 1px solid rgba(0, 217, 255, 0.2);
         }
 
+        /* Agent questions - stand out from informational content */
+        .message-content .agent-question {
+            background: rgba(0, 217, 255, 0.08);
+            border-left: 3px solid var(--accent-primary);
+            padding: 10px 14px;
+            margin: 12px 0 4px 0;
+            border-radius: 0 8px 8px 0;
+            color: var(--text-primary);
+            font-weight: 500;
+        }
+
         /* Modal */
         .modal-overlay {
             display: none;
@@ -3090,6 +3101,11 @@
             text = text.replace(/(<\/[ou]l>)\s*<br>/g, '$1');
             text = text.replace(/<p><br>/g, '<p>');
             text = text.replace(/<br><\/p>/g, '</p>');
+
+            // Highlight questions to the user (paragraphs ending with ?)
+            // This helps differentiate agent questions from informational content
+            text = text.replace(/<p>([^<]*\?)<\/p>/g, '<p class="agent-question">$1</p>');
+
             return text;
         }
 
