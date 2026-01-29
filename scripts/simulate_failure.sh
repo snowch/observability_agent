@@ -102,19 +102,19 @@ postgres_status() {
 
     echo -e "PostgreSQL: ${GREEN}CONTAINER RUNNING${NC}"
 
-    # Check if we can actually query it (with timeout)
-    if timeout 10 docker compose exec -T postgresql psql -U root -c "SELECT 1;" > /dev/null 2>&1; then
-        echo -e "Queries: ${GREEN}RESPONDING${NC}"
-    else
-        echo -e "Queries: ${YELLOW}SLOW OR UNRESPONSIVE${NC}"
-    fi
-
-    # Check for network latency injection
+    # Check for network latency injection FIRST (doesn't require psql)
     NETEM_ACTIVE=$(timeout 5 docker exec "$CONTAINER_ID" sh -c 'tc qdisc show dev eth0 2>/dev/null | grep netem' 2>/dev/null)
     if [ -n "$NETEM_ACTIVE" ]; then
         echo -e "Network latency: ${YELLOW}INJECTED${NC} ($NETEM_ACTIVE)"
+        echo -e "Queries: ${YELLOW}DEGRADED${NC} (latency injected)"
     else
         echo -e "Network latency: ${GREEN}NORMAL${NC}"
+        # Only do the query check when no latency is injected (avoids long wait)
+        if timeout 5 docker exec "$CONTAINER_ID" psql -U root -c "SELECT 1;" > /dev/null 2>&1; then
+            echo -e "Queries: ${GREEN}RESPONDING${NC}"
+        else
+            echo -e "Queries: ${YELLOW}SLOW OR UNRESPONSIVE${NC}"
+        fi
     fi
 
     # Check for background load generator process
