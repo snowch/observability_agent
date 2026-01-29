@@ -2856,6 +2856,7 @@
         let currentModalHost = null;
         let availableServices = [];
         let availableDatabases = [];
+        let alertsConfig = { investigate_critical_only: false };
         const REFRESH_INTERVAL = 15000; // 15 seconds for faster error detection
 
         const chartColors = ['#00d9ff', '#7c3aed', '#10b981', '#f59e0b', '#ef4444', '#ec4899'];
@@ -2863,7 +2864,14 @@
         Chart.defaults.color = '#a0a0b0';
         Chart.defaults.borderColor = 'rgba(255, 255, 255, 0.06)';
 
-        document.addEventListener('DOMContentLoaded', () => {
+        document.addEventListener('DOMContentLoaded', async () => {
+            // Fetch alerts config
+            try {
+                const configResp = await fetch('/api/alerts/config');
+                alertsConfig = await configResp.json();
+            } catch (e) {
+                console.error('Failed to fetch alerts config:', e);
+            }
             refreshStatus();
             startSidebarAutoRefresh();
         });
@@ -3709,12 +3717,24 @@ ${escapeHtml(alert.supporting_evidence)}</div>
                     </div>
                 `;
             } else {
+                // Determine why no investigation exists
+                const isNonCritical = severity !== 'critical';
+                const criticalOnlyMode = alertsConfig.investigate_critical_only;
+
+                let noInvestigationReason;
+                if (criticalOnlyMode && isNonCritical) {
+                    noInvestigationReason = `Auto-investigation is configured for <strong>critical alerts only</strong>.<br>
+                        This ${severity} alert was not automatically investigated.`;
+                } else {
+                    noInvestigationReason = `No investigation available yet.<br>
+                        The automated system may be rate-limited or processing other alerts.`;
+                }
+
                 investigationHtml = `
                     <div class="alert-no-investigation">
                         <div class="alert-no-investigation-icon">🔍</div>
                         <div class="alert-no-investigation-text">
-                            No investigation available yet.<br>
-                            The automated system may be rate-limited or processing other alerts.
+                            ${noInvestigationReason}
                         </div>
                         <button class="alert-action-btn primary" onclick="requestInvestigation('${escapeHtml(alert.alert_id)}')" id="investigate-btn-${escapeHtml(alert.alert_id)}">
                             Request Investigation
