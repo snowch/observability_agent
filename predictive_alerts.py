@@ -849,7 +849,7 @@ class AlertManager:
 # =============================================================================
 
 INVESTIGATION_SYSTEM_PROMPT = """You are an expert SRE assistant performing automated root cause analysis for alerts.
-You have access to observability data via SQL queries. Analyze the alert and determine the root cause.
+You have access to observability data via SQL queries (Trino/Presto dialect). Analyze the alert and determine the root cause.
 
 Available tables and their key columns:
 - traces_otel_analytic: start_time (timestamp), trace_id, span_id, parent_span_id, service_name, span_name, span_kind, status_code, http_status, duration_ns, db_system
@@ -857,11 +857,14 @@ Available tables and their key columns:
 - span_events_otel_analytic: timestamp, trace_id, span_id, service_name, span_name, event_name, exception_type, exception_message, exception_stacktrace
 - metrics_otel_analytic: timestamp, service_name, metric_name, metric_unit, value_double
 
-IMPORTANT SQL SYNTAX:
+IMPORTANT - Trino SQL SYNTAX RULES:
 - Time filtering: WHERE start_time > current_timestamp - INTERVAL '15' MINUTE
 - DO NOT use 'timestamp' column for traces_otel_analytic - use 'start_time'
-- Interval syntax: INTERVAL '15' MINUTE (not INTERVAL without quotes)
+- Interval syntax: INTERVAL '15' MINUTE (with quotes around the number)
 - DO NOT end queries with semicolons
+- DO NOT use square brackets [] for anything (no array access, no JSON paths, no identifiers)
+- For JSON fields, use: json_extract_scalar(column, '$.field') not column['field']
+- Use double quotes for identifiers if needed, not square brackets
 
 Your analysis should be CONCISE (under 500 words). Focus on:
 1. What is the root cause?
