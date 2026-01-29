@@ -150,13 +150,36 @@ All settings are configurable via environment variables:
 | `MIN_SAMPLES_FOR_BASELINE` | 10 | Minimum data points required for baseline |
 | `ALERT_COOLDOWN_MINUTES` | 15 | Cooldown after resolution before re-alerting |
 
+### Automated Root Cause Analysis
+
+When alerts are created, the service can automatically investigate using an LLM to find the root cause. This requires an Anthropic API key.
+
+**Additional environment variables for investigations:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ANTHROPIC_API_KEY` | - | API key for LLM investigations (required) |
+| `INVESTIGATION_MODEL` | claude-3-5-haiku-20241022 | Model to use (Haiku recommended for cost) |
+| `INVESTIGATION_MAX_TOKENS` | 1000 | Max response tokens per investigation |
+| `MAX_INVESTIGATIONS_PER_HOUR` | 5 | Rate limit for API cost control |
+| `INVESTIGATION_SERVICE_COOLDOWN_MINUTES` | 30 | Cooldown per service between investigations |
+| `INVESTIGATE_CRITICAL_ONLY` | false | Only investigate critical severity alerts |
+
+**How it works:**
+1. When a new alert is created, the investigator checks rate limits
+2. If within limits, it queries recent traces/logs/errors for the service
+3. The LLM analyzes the data and identifies the root cause
+4. Results are stored in `alert_investigations` table
+5. Web UI displays the root cause summary with the alert
+
 ### Database Tables
 
-The service creates/uses three tables for storing state:
+The service creates/uses four tables for storing state:
 
 - `service_baselines` - Computed statistical baselines per service/metric
 - `anomaly_scores` - Historical anomaly detection results
 - `alerts` - Active and resolved alerts
+- `alert_investigations` - LLM-generated root cause analysis
 
 Create tables using the DDL in `ddl.sql`.
 

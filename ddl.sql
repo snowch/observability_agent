@@ -126,3 +126,18 @@ CREATE TABLE vast."csnow-db|otel".alerts (
    auto_resolved boolean
 );
 
+-- Alert investigations: LLM-powered root cause analysis
+CREATE TABLE vast."csnow-db|otel".alert_investigations (
+   investigation_id varchar,
+   alert_id varchar,
+   investigated_at timestamp(9),
+   service_name varchar,
+   alert_type varchar,
+   model_used varchar,              -- 'claude-3-5-haiku-20241022'
+   root_cause_summary varchar,
+   recommended_actions varchar,
+   supporting_evidence varchar,     -- JSON with relevant traces/errors found
+   queries_executed integer,
+   tokens_used integer
+);
+

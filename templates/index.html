@@ -282,6 +282,13 @@
             line-height: 1.4;
         }
 
+        .alert-root-cause {
+            font-size: 11px;
+            color: var(--accent-primary);
+            line-height: 1.4;
+            font-weight: 500;
+        }
+
         .alert-summary {
             display: flex;
             gap: 12px;
@@ -753,6 +760,17 @@
         .message-content li code {
             background: rgba(0, 217, 255, 0.1);
             border: 1px solid rgba(0, 217, 255, 0.2);
+        }
+
+        /* Agent questions - stand out from informational content */
+        .message-content .agent-question {
+            background: rgba(0, 217, 255, 0.08);
+            border-left: 3px solid var(--accent-primary);
+            padding: 10px 14px;
+            margin: 12px 0 4px 0;
+            border-radius: 0 8px 8px 0;
+            color: var(--text-primary);
+            font-weight: 500;
         }
 
         /* Modal */
@@ -3090,6 +3108,11 @@
             text = text.replace(/(<\/[ou]l>)\s*<br>/g, '$1');
             text = text.replace(/<p><br>/g, '<p>');
             text = text.replace(/<br><\/p>/g, '</p>');
+
+            // Highlight questions to the user (paragraphs ending with ?)
+            // This helps differentiate agent questions from informational content
+            text = text.replace(/<p>([^<]*\?)<\/p>/g, '<p class="agent-question">$1</p>');
+
             return text;
         }
 
@@ -3307,15 +3330,19 @@
                     alertsList.innerHTML = data.alerts.map(alert => {
                         const severity = alert.severity || 'info';
                         const timeAgo = formatTimeAgo(alert.created_at);
+                        const hasInvestigation = alert.root_cause_summary;
 
                         return `
                             <div class="alert-item alert-${severity}" onclick="investigateAlert('${escapeHtml(alert.service_name)}', '${escapeHtml(alert.alert_type)}')">
                                 <div class="alert-header">
                                     <span class="alert-severity ${severity}">${severity}</span>
-                                    <span class="alert-time">${timeAgo}</span>
+                                    <span class="alert-time">${timeAgo}${hasInvestigation ? ' • analyzed' : ''}</span>
                                 </div>
                                 <div class="alert-title">${escapeHtml(alert.title || alert.alert_type)}</div>
-                                <div class="alert-description">${escapeHtml(alert.description || '')}</div>
+                                ${hasInvestigation
+                                    ? `<div class="alert-root-cause">${escapeHtml(alert.root_cause_summary)}</div>`
+                                    : `<div class="alert-description">${escapeHtml(alert.description || '')}</div>`
+                                }
                             </div>
                         `;
                     }).join('');
