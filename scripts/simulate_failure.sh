@@ -104,14 +104,38 @@ postgres_status() {
             echo -e "Connections: ${RED}BLOCKED${NC}"
         fi
 
-        # Check for slow query simulation
-        SLOW_QUERY_FUNC=$(docker compose exec -T postgresql psql -U root -d "${POSTGRES_DB:-otel}" -t -c \
-            "SELECT COUNT(*) FROM pg_proc WHERE proname = 'simulate_slow_query';" 2>/dev/null | tr -d ' ')
+        # Check for load generator function (new approach)
+        LOAD_GEN_FUNC=$(docker compose exec -T postgresql psql -U root -d "${POSTGRES_DB:-otel}" -t -c \
+            "SELECT COUNT(*) FROM pg_proc WHERE proname = 'run_load_iteration';" 2>/dev/null | tr -d ' ')
 
-        if [ "$SLOW_QUERY_FUNC" = "1" ]; then
-            echo -e "Slow query simulation: ${YELLOW}ACTIVE${NC}"
+        # Check for background load generator process
+        MARKER_FILE="/tmp/postgres_load_generator.pid"
+        LOAD_GEN_RUNNING="no"
+        if [ -f "$MARKER_FILE" ]; then
+            LOAD_GEN_PID=$(cat "$MARKER_FILE")
+            if kill -0 "$LOAD_GEN_PID" 2>/dev/null; then
+                LOAD_GEN_RUNNING="yes"
+            fi
+        fi
+
+        if [ "$LOAD_GEN_FUNC" = "1" ] && [ "$LOAD_GEN_RUNNING" = "yes" ]; then
+            echo -e "Load generator: ${YELLOW}ACTIVE${NC} (PID: $LOAD_GEN_PID)"
+        elif [ "$LOAD_GEN_FUNC" = "1" ]; then
+            echo -e "Load generator: ${YELLOW}CONFIGURED${NC} (not running)"
         else
-            echo -e "Slow query simulation: ${GREEN}INACTIVE${NC}"
+            echo -e "Load generator: ${GREEN}INACTIVE${NC}"
+        fi
+
+        # Check work_mem setting (reduced = degraded mode)
+        WORK_MEM=$(docker compose exec -T postgresql psql -U root -d "${POSTGRES_DB:-otel}" -t -c \
+            "SHOW work_mem;" 2>/dev/null | tr -d ' ')
+        if [ -n "$WORK_MEM" ]; then
+            # Check if work_mem is very low (64kB or 512kB indicates degraded mode)
+            if echo "$WORK_MEM" | grep -qE "^(64|512)kB$"; then
+                echo -e "Performance: ${YELLOW}DEGRADED${NC} (work_mem=$WORK_MEM)"
+            else
+                echo -e "Performance: ${GREEN}NORMAL${NC} (work_mem=$WORK_MEM)"
+            fi
         fi
     else
         echo -e "PostgreSQL: ${RED}DOWN${NC}"
@@ -138,27 +162,71 @@ postgres_degrade() {
 postgres_degrade_slow() {
     log_info "Enabling slow query simulation..."
 
-    # Create a function that adds artificial delay to queries
-    # This will be called by a trigger on the most common table
+    # Create load generation infrastructure in PostgreSQL
     docker compose exec -T postgresql psql -U root -d "${POSTGRES_DB:-otel}" <<'EOF'
--- Create a function that simulates slow queries by adding random delay
-CREATE OR REPLACE FUNCTION simulate_slow_query()
-RETURNS trigger AS $$
+-- Create a large table for expensive operations
+CREATE TABLE IF NOT EXISTS _load_generator (
+    id SERIAL PRIMARY KEY,
+    data TEXT,
+    num INTEGER,
+    created_at TIMESTAMP DEFAULT now()
+);
+
+-- Populate with data if empty
+INSERT INTO _load_generator (data, num)
+SELECT repeat('x', 1000), generate_series(1, 50000)
+WHERE NOT EXISTS (SELECT 1 FROM _load_generator LIMIT 1);
+
+-- Reduce work_mem to force disk-based sorts (slows down all queries)
+ALTER SYSTEM SET work_mem = '64kB';
+-- Reduce effective_cache_size to pessimize query plans
+ALTER SYSTEM SET effective_cache_size = '32MB';
+-- Add artificial delay to all statements
+ALTER SYSTEM SET log_min_duration_statement = 0;
+
+SELECT pg_reload_conf();
+
+-- Create a function that runs expensive operations
+CREATE OR REPLACE FUNCTION run_load_iteration() RETURNS void AS $$
 BEGIN
-    -- Add 100-500ms delay to simulate slow queries
-    PERFORM pg_sleep(0.1 + random() * 0.4);
-    RETURN NEW;
+    -- Expensive self-join with sorting (consumes CPU and I/O)
+    PERFORM COUNT(*) FROM _load_generator a
+    CROSS JOIN (SELECT * FROM _load_generator ORDER BY random() LIMIT 100) b
+    WHERE a.num % 7 = b.num % 11;
+
+    -- Force some I/O with large sorts
+    PERFORM array_agg(data ORDER BY random()) FROM _load_generator LIMIT 5000;
 END;
 $$ LANGUAGE plpgsql;
-
--- Also reduce work_mem to increase query times
-ALTER SYSTEM SET work_mem = '1MB';
-SELECT pg_reload_conf();
 EOF
 
+    # Start background load generator process
+    log_info "Starting background load generator..."
+
+    # Create a marker file to track the load generator
+    MARKER_FILE="/tmp/postgres_load_generator.pid"
+
+    # Kill any existing load generator
+    if [ -f "$MARKER_FILE" ]; then
+        OLD_PID=$(cat "$MARKER_FILE")
+        kill "$OLD_PID" 2>/dev/null || true
+    fi
+
+    # Start continuous load generator in background
+    (
+        while true; do
+            docker compose exec -T postgresql psql -U root -d "${POSTGRES_DB:-otel}" -c \
+                "SELECT run_load_iteration();" > /dev/null 2>&1
+            sleep 0.5
+        done
+    ) &
+
+    echo $! > "$MARKER_FILE"
+
     log_info "Slow query simulation enabled."
-    log_info "Queries will now have 100-500ms artificial delay."
-    log_info "This should trigger 'db_slow_queries' alerts in root cause monitoring."
+    log_info "Background load generator running (PID: $(cat $MARKER_FILE))"
+    log_info "PostgreSQL resources are now being consumed, slowing all queries."
+    log_info "This should trigger 'DB_SLOW_QUERIES' alerts in root cause monitoring."
 }
 
 postgres_degrade_memory() {
@@ -193,14 +261,29 @@ EOF
 postgres_restore() {
     log_info "Restoring PostgreSQL to normal operation..."
 
-    docker compose exec -T postgresql psql -U root -d "${POSTGRES_DB:-otel}" <<'EOF'
--- Remove slow query function
-DROP FUNCTION IF EXISTS simulate_slow_query() CASCADE;
+    # Stop the background load generator if running
+    MARKER_FILE="/tmp/postgres_load_generator.pid"
+    if [ -f "$MARKER_FILE" ]; then
+        OLD_PID=$(cat "$MARKER_FILE")
+        log_info "Stopping background load generator (PID: $OLD_PID)..."
+        kill "$OLD_PID" 2>/dev/null || true
+        # Also kill any child processes (docker exec)
+        pkill -P "$OLD_PID" 2>/dev/null || true
+        rm -f "$MARKER_FILE"
+    fi
 
--- Reset memory settings to defaults
+    docker compose exec -T postgresql psql -U root -d "${POSTGRES_DB:-otel}" <<'EOF'
+-- Remove load generator function and table
+DROP FUNCTION IF EXISTS run_load_iteration() CASCADE;
+DROP FUNCTION IF EXISTS simulate_slow_query() CASCADE;
+DROP TABLE IF EXISTS _load_generator;
+
+-- Reset all memory/performance settings to defaults
 ALTER SYSTEM RESET work_mem;
 ALTER SYSTEM RESET maintenance_work_mem;
 ALTER SYSTEM RESET temp_buffers;
+ALTER SYSTEM RESET effective_cache_size;
+ALTER SYSTEM RESET log_min_duration_statement;
 
 SELECT pg_reload_conf();
 

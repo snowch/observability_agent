@@ -57,18 +57,27 @@ These inject failures at the application level, producing rich telemetry:
 ### PostgreSQL Degradation
 
 ```bash
-# Slow queries (adds artificial delay)
+# Slow queries (starts background load generator that consumes PostgreSQL resources)
+# This creates real contention, slowing down ALL queries including the application's
 ./scripts/simulate_failure.sh degrade postgres slow
 
-# Memory pressure (reduces work_mem)
+# Memory pressure (reduces work_mem to force disk-based sorts)
 ./scripts/simulate_failure.sh degrade postgres memory
 
-# Check status
+# Check status (shows load generator state and current performance settings)
 ./scripts/simulate_failure.sh status postgres
 
-# Restore to normal
+# Restore to normal (stops load generator and resets all settings)
 ./scripts/simulate_failure.sh restore postgres
 ```
+
+**How `degrade postgres slow` works:**
+1. Creates a large table with 50,000 rows for expensive operations
+2. Reduces `work_mem` to 64kB (forces disk-based sorts)
+3. Starts a background process that continuously runs expensive cross-join queries
+4. This consumes PostgreSQL CPU, memory, and I/O - slowing down all concurrent queries
+
+The load generator runs until you call `restore postgres`.
 
 ### otel-demo API Injection
 
