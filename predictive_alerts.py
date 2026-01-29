@@ -160,12 +160,21 @@ class Severity(Enum):
 
 
 class AlertType(Enum):
+    # Symptom-based alerts (existing)
     ERROR_SPIKE = "error_spike"
     LATENCY_DEGRADATION = "latency_degradation"
     THROUGHPUT_DROP = "throughput_drop"
     ANOMALY = "anomaly"
     TREND = "trend"
     SERVICE_DOWN = "service_down"
+
+    # Root cause alerts (new) - proactive detection of underlying issues
+    DB_CONNECTION_FAILURE = "db_connection_failure"    # Database connection issues
+    DB_SLOW_QUERIES = "db_slow_queries"                # Database query performance degradation
+    DEPENDENCY_FAILURE = "dependency_failure"          # Downstream service failures
+    DEPENDENCY_LATENCY = "dependency_latency"          # Downstream service slow responses
+    EXCEPTION_SURGE = "exception_surge"                # Unusual increase in exceptions
+    NEW_EXCEPTION_TYPE = "new_exception_type"          # Previously unseen exception type
 
 
 class AlertStatus(Enum):
@@ -281,6 +290,29 @@ class BaselineComputer:
             if throughput_baseline:
                 self.baselines[service]["throughput"] = throughput_baseline
                 self._store_baseline(service, "throughput", throughput_baseline)
+
+            # === ROOT CAUSE BASELINES ===
+
+            # Compute database query baselines for this service
+            db_baselines = self._compute_db_query_baselines(service)
+            for db_metric, baseline in db_baselines.items():
+                self.baselines[service][db_metric] = baseline
+                self._store_baseline(service, db_metric, baseline)
+
+            # Compute exception rate baseline
+            exception_baseline = self._compute_exception_rate_baseline(service)
+            if exception_baseline:
+                self.baselines[service]["exception_rate"] = exception_baseline
+                self._store_baseline(service, "exception_rate", exception_baseline)
+
+            # Compute dependency latency baselines
+            dep_baselines = self._compute_dependency_baselines(service)
+            for dep_metric, baseline in dep_baselines.items():
+                self.baselines[service][dep_metric] = baseline
+                self._store_baseline(service, dep_metric, baseline)
+
+        # Store known exception types across all services
+        self._compute_known_exception_types()
 
         print(f"[Baseline] Computed baselines for {len(self.baselines)} services")
         return self.baselines
@@ -412,6 +444,202 @@ class BaselineComputer:
             return self.baselines[service][metric_type]
         return None
 
+    # =========================================================================
+    # ROOT CAUSE BASELINE METHODS
+    # =========================================================================
+
+    def _compute_db_query_baselines(self, service: str) -> Dict[str, Dict]:
+        """Compute database query latency and error rate baselines per db_system."""
+        baselines = {}
+
+        # Get database systems this service uses
+        db_systems_sql = f"""
+            SELECT DISTINCT db_system
+            FROM traces_otel_analytic
+            WHERE service_name = '{service}'
+            AND db_system IS NOT NULL AND db_system != ''
+            AND start_time > current_timestamp - interval '{self.config.baseline_window_hours}' hour
+        """
+        db_systems = self.executor.execute(db_systems_sql)
+
+        for row in db_systems:
+            db_system = row["db_system"]
+
+            # Database query latency baseline
+            latency_sql = f"""
+                SELECT
+                    date_trunc('hour', start_time) as hour,
+                    approx_percentile(duration_ns / 1e6, 0.95) as latency_p95
+                FROM traces_otel_analytic
+                WHERE service_name = '{service}'
+                AND db_system = '{db_system}'
+                AND start_time > current_timestamp - interval '{self.config.baseline_window_hours}' hour
+                AND duration_ns > 0
+                GROUP BY date_trunc('hour', start_time)
+                HAVING COUNT(*) >= 5
+                ORDER BY hour
+            """
+            latency_results = self.executor.execute(latency_sql)
+
+            if len(latency_results) >= self.config.min_samples_for_baseline:
+                latencies = [r["latency_p95"] for r in latency_results if r["latency_p95"] is not None]
+                if latencies:
+                    stats = self._compute_stats(latencies)
+                    if stats:
+                        baselines[f"db_{db_system}_latency"] = stats
+
+            # Database error rate baseline
+            error_sql = f"""
+                SELECT
+                    date_trunc('hour', start_time) as hour,
+                    COUNT(*) as total,
+                    SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) as errors,
+                    CAST(SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) AS DOUBLE) / COUNT(*) as error_rate
+                FROM traces_otel_analytic
+                WHERE service_name = '{service}'
+                AND db_system = '{db_system}'
+                AND start_time > current_timestamp - interval '{self.config.baseline_window_hours}' hour
+                GROUP BY date_trunc('hour', start_time)
+                HAVING COUNT(*) >= 5
+                ORDER BY hour
+            """
+            error_results = self.executor.execute(error_sql)
+
+            if len(error_results) >= self.config.min_samples_for_baseline:
+                error_rates = [r["error_rate"] for r in error_results if r["error_rate"] is not None]
+                if error_rates:
+                    stats = self._compute_stats(error_rates)
+                    if stats:
+                        baselines[f"db_{db_system}_error_rate"] = stats
+
+        return baselines
+
+    def _compute_exception_rate_baseline(self, service: str) -> Optional[Dict]:
+        """Compute exception rate baseline from span events."""
+        sql = f"""
+            SELECT
+                date_trunc('hour', timestamp) as hour,
+                COUNT(*) as exception_count
+            FROM span_events_otel_analytic
+            WHERE service_name = '{service}'
+            AND exception_type IS NOT NULL AND exception_type != ''
+            AND timestamp > current_timestamp - interval '{self.config.baseline_window_hours}' hour
+            GROUP BY date_trunc('hour', timestamp)
+            ORDER BY hour
+        """
+        results = self.executor.execute(sql)
+
+        if len(results) < self.config.min_samples_for_baseline:
+            return None
+
+        counts = [r["exception_count"] for r in results if r["exception_count"] is not None]
+        return self._compute_stats(counts) if counts else None
+
+    def _compute_dependency_baselines(self, service: str) -> Dict[str, Dict]:
+        """Compute latency and error rate baselines for downstream dependencies."""
+        baselines = {}
+
+        # Find downstream services this service calls
+        deps_sql = f"""
+            SELECT DISTINCT child.service_name as dependency
+            FROM traces_otel_analytic parent
+            JOIN traces_otel_analytic child
+                ON parent.span_id = child.parent_span_id
+                AND parent.trace_id = child.trace_id
+            WHERE parent.service_name = '{service}'
+            AND child.service_name != '{service}'
+            AND child.service_name IS NOT NULL
+            AND child.db_system IS NULL
+            AND parent.start_time > current_timestamp - interval '{self.config.baseline_window_hours}' hour
+        """
+        deps = self.executor.execute(deps_sql)
+
+        for row in deps:
+            dep_service = row["dependency"]
+
+            # Dependency call latency baseline
+            latency_sql = f"""
+                SELECT
+                    date_trunc('hour', child.start_time) as hour,
+                    approx_percentile(child.duration_ns / 1e6, 0.95) as latency_p95
+                FROM traces_otel_analytic parent
+                JOIN traces_otel_analytic child
+                    ON parent.span_id = child.parent_span_id
+                    AND parent.trace_id = child.trace_id
+                WHERE parent.service_name = '{service}'
+                AND child.service_name = '{dep_service}'
+                AND parent.start_time > current_timestamp - interval '{self.config.baseline_window_hours}' hour
+                AND child.duration_ns > 0
+                GROUP BY date_trunc('hour', child.start_time)
+                HAVING COUNT(*) >= 5
+                ORDER BY hour
+            """
+            latency_results = self.executor.execute(latency_sql)
+
+            if len(latency_results) >= self.config.min_samples_for_baseline:
+                latencies = [r["latency_p95"] for r in latency_results if r["latency_p95"] is not None]
+                if latencies:
+                    stats = self._compute_stats(latencies)
+                    if stats:
+                        baselines[f"dep_{dep_service}_latency"] = stats
+
+            # Dependency error rate baseline
+            error_sql = f"""
+                SELECT
+                    date_trunc('hour', child.start_time) as hour,
+                    COUNT(*) as total,
+                    SUM(CASE WHEN child.status_code = 'ERROR' THEN 1 ELSE 0 END) as errors,
+                    CAST(SUM(CASE WHEN child.status_code = 'ERROR' THEN 1 ELSE 0 END) AS DOUBLE) / COUNT(*) as error_rate
+                FROM traces_otel_analytic parent
+                JOIN traces_otel_analytic child
+                    ON parent.span_id = child.parent_span_id
+                    AND parent.trace_id = child.trace_id
+                WHERE parent.service_name = '{service}'
+                AND child.service_name = '{dep_service}'
+                AND parent.start_time > current_timestamp - interval '{self.config.baseline_window_hours}' hour
+                GROUP BY date_trunc('hour', child.start_time)
+                HAVING COUNT(*) >= 5
+                ORDER BY hour
+            """
+            error_results = self.executor.execute(error_sql)
+
+            if len(error_results) >= self.config.min_samples_for_baseline:
+                error_rates = [r["error_rate"] for r in error_results if r["error_rate"] is not None]
+                if error_rates:
+                    stats = self._compute_stats(error_rates)
+                    if stats:
+                        baselines[f"dep_{dep_service}_error_rate"] = stats
+
+        return baselines
+
+    def _compute_known_exception_types(self):
+        """Track known exception types per service for new exception detection."""
+        sql = f"""
+            SELECT service_name, exception_type, COUNT(*) as count
+            FROM span_events_otel_analytic
+            WHERE exception_type IS NOT NULL AND exception_type != ''
+            AND timestamp > current_timestamp - interval '{self.config.baseline_window_hours}' hour
+            GROUP BY service_name, exception_type
+            HAVING COUNT(*) >= 3
+        """
+        results = self.executor.execute(sql)
+
+        # Store known exception types per service
+        self.known_exception_types: Dict[str, set] = {}
+        for row in results:
+            service = row["service_name"]
+            exc_type = row["exception_type"]
+            if service not in self.known_exception_types:
+                self.known_exception_types[service] = set()
+            self.known_exception_types[service].add(exc_type)
+
+        total_types = sum(len(v) for v in self.known_exception_types.values())
+        print(f"[Baseline] Tracked {total_types} known exception types across {len(self.known_exception_types)} services")
+
+    def get_known_exception_types(self, service: str) -> set:
+        """Get known exception types for a service."""
+        return getattr(self, 'known_exception_types', {}).get(service, set())
+
 
 # =============================================================================
 # Anomaly Detector
@@ -442,6 +670,8 @@ class AnomalyDetector:
         services = list(self.baseline_computer.baselines.keys())
 
         for service in services:
+            # === SYMPTOM-BASED DETECTION (existing) ===
+
             # Check error rate
             error_anomaly = self._detect_error_rate_anomaly(service)
             if error_anomaly:
@@ -461,6 +691,20 @@ class AnomalyDetector:
             down_anomaly = self._detect_service_down(service)
             if down_anomaly:
                 anomalies.append(down_anomaly)
+
+            # === ROOT CAUSE DETECTION (new) ===
+
+            # Check database health issues
+            db_anomalies = self._detect_database_issues(service)
+            anomalies.extend(db_anomalies)
+
+            # Check dependency health issues
+            dep_anomalies = self._detect_dependency_issues(service)
+            anomalies.extend(dep_anomalies)
+
+            # Check exception patterns
+            exc_anomalies = self._detect_exception_issues(service)
+            anomalies.extend(exc_anomalies)
 
         return anomalies
 
@@ -671,6 +915,297 @@ class AnomalyDetector:
             )
         """
         self.executor.execute_write(sql)
+
+    # =========================================================================
+    # ROOT CAUSE DETECTION METHODS
+    # =========================================================================
+
+    def _detect_database_issues(self, service: str) -> List[Dict]:
+        """Detect database-related root causes: slow queries, connection failures."""
+        anomalies = []
+
+        # Get all database baselines for this service
+        service_baselines = self.baseline_computer.baselines.get(service, {})
+        db_metrics = [k for k in service_baselines.keys() if k.startswith("db_")]
+
+        for metric in db_metrics:
+            # Parse db_system from metric name (e.g., "db_postgresql_latency" -> "postgresql")
+            parts = metric.split("_")
+            if len(parts) < 3:
+                continue
+
+            db_system = parts[1]
+            metric_type_suffix = parts[2]  # "latency" or "error_rate"
+
+            baseline = service_baselines[metric]
+
+            if metric_type_suffix == "latency":
+                # Check database query latency
+                sql = f"""
+                    SELECT approx_percentile(duration_ns / 1e6, 0.95) as latency_p95
+                    FROM traces_otel_analytic
+                    WHERE service_name = '{service}'
+                    AND db_system = '{db_system}'
+                    AND start_time > current_timestamp - interval '5' minute
+                    AND duration_ns > 0
+                    HAVING COUNT(*) >= 3
+                """
+                results = self.executor.execute(sql)
+
+                if results and results[0].get("latency_p95") is not None:
+                    current_latency = results[0]["latency_p95"]
+
+                    if baseline["stddev"] > 0:
+                        z_score = (current_latency - baseline["mean"]) / baseline["stddev"]
+
+                        if z_score > self.config.zscore_threshold:
+                            severity = Severity.WARNING if z_score < self.config.zscore_threshold * 1.5 else Severity.CRITICAL
+
+                            self._store_anomaly_score(
+                                service, metric, current_latency,
+                                baseline["mean"], baseline["mean"], baseline["stddev"],
+                                z_score, True, "zscore"
+                            )
+
+                            anomalies.append({
+                                "service": service,
+                                "metric_type": metric,
+                                "alert_type": AlertType.DB_SLOW_QUERIES,
+                                "severity": severity,
+                                "current_value": current_latency,
+                                "baseline_value": baseline["mean"],
+                                "z_score": z_score,
+                                "message": f"Database {db_system} queries slow: {current_latency:.0f}ms P95 (baseline: {baseline['mean']:.0f}ms, z={z_score:.1f})"
+                            })
+
+            elif metric_type_suffix == "error" or metric.endswith("_error_rate"):
+                # Check database error rate (connection failures, query errors)
+                sql = f"""
+                    SELECT
+                        COUNT(*) as total,
+                        SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) as errors,
+                        CAST(SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) AS DOUBLE) /
+                            NULLIF(COUNT(*), 0) as error_rate
+                    FROM traces_otel_analytic
+                    WHERE service_name = '{service}'
+                    AND db_system = '{db_system}'
+                    AND start_time > current_timestamp - interval '5' minute
+                """
+                results = self.executor.execute(sql)
+
+                if results and results[0].get("total", 0) >= 3:
+                    current_rate = results[0].get("error_rate") or 0
+
+                    if baseline["stddev"] > 0:
+                        z_score = (current_rate - baseline["mean"]) / baseline["stddev"]
+
+                        # Database errors are more critical - lower threshold
+                        if z_score > self.config.zscore_threshold * 0.8 or current_rate > 0.1:
+                            severity = Severity.CRITICAL if current_rate > 0.2 or z_score > self.config.zscore_threshold * 1.5 else Severity.WARNING
+
+                            self._store_anomaly_score(
+                                service, metric, current_rate,
+                                baseline["mean"], baseline["mean"], baseline["stddev"],
+                                z_score, True, "zscore"
+                            )
+
+                            anomalies.append({
+                                "service": service,
+                                "metric_type": metric,
+                                "alert_type": AlertType.DB_CONNECTION_FAILURE,
+                                "severity": severity,
+                                "current_value": current_rate,
+                                "baseline_value": baseline["mean"],
+                                "z_score": z_score,
+                                "message": f"Database {db_system} errors: {current_rate:.1%} error rate (baseline: {baseline['mean']:.1%})"
+                            })
+
+        return anomalies
+
+    def _detect_dependency_issues(self, service: str) -> List[Dict]:
+        """Detect dependency-related root causes: downstream service failures, latency."""
+        anomalies = []
+
+        # Get all dependency baselines for this service
+        service_baselines = self.baseline_computer.baselines.get(service, {})
+        dep_metrics = [k for k in service_baselines.keys() if k.startswith("dep_")]
+
+        for metric in dep_metrics:
+            # Parse dependency service from metric name (e.g., "dep_auth-service_latency")
+            parts = metric.split("_")
+            if len(parts) < 3:
+                continue
+
+            # Handle service names with underscores
+            dep_service = "_".join(parts[1:-1])
+            metric_type_suffix = parts[-1]  # "latency" or "error_rate"
+
+            baseline = service_baselines[metric]
+
+            if metric_type_suffix == "latency":
+                # Check dependency call latency
+                sql = f"""
+                    SELECT approx_percentile(child.duration_ns / 1e6, 0.95) as latency_p95
+                    FROM traces_otel_analytic parent
+                    JOIN traces_otel_analytic child
+                        ON parent.span_id = child.parent_span_id
+                        AND parent.trace_id = child.trace_id
+                    WHERE parent.service_name = '{service}'
+                    AND child.service_name = '{dep_service}'
+                    AND parent.start_time > current_timestamp - interval '5' minute
+                    AND child.duration_ns > 0
+                    HAVING COUNT(*) >= 3
+                """
+                results = self.executor.execute(sql)
+
+                if results and results[0].get("latency_p95") is not None:
+                    current_latency = results[0]["latency_p95"]
+
+                    if baseline["stddev"] > 0:
+                        z_score = (current_latency - baseline["mean"]) / baseline["stddev"]
+
+                        if z_score > self.config.zscore_threshold:
+                            severity = Severity.WARNING if z_score < self.config.zscore_threshold * 1.5 else Severity.CRITICAL
+
+                            self._store_anomaly_score(
+                                service, metric, current_latency,
+                                baseline["mean"], baseline["mean"], baseline["stddev"],
+                                z_score, True, "zscore"
+                            )
+
+                            anomalies.append({
+                                "service": service,
+                                "metric_type": metric,
+                                "alert_type": AlertType.DEPENDENCY_LATENCY,
+                                "severity": severity,
+                                "current_value": current_latency,
+                                "baseline_value": baseline["mean"],
+                                "z_score": z_score,
+                                "message": f"Dependency {dep_service} slow: {current_latency:.0f}ms P95 (baseline: {baseline['mean']:.0f}ms, z={z_score:.1f})"
+                            })
+
+            elif metric_type_suffix == "rate":  # error_rate
+                # Check dependency error rate
+                sql = f"""
+                    SELECT
+                        COUNT(*) as total,
+                        SUM(CASE WHEN child.status_code = 'ERROR' THEN 1 ELSE 0 END) as errors,
+                        CAST(SUM(CASE WHEN child.status_code = 'ERROR' THEN 1 ELSE 0 END) AS DOUBLE) /
+                            NULLIF(COUNT(*), 0) as error_rate
+                    FROM traces_otel_analytic parent
+                    JOIN traces_otel_analytic child
+                        ON parent.span_id = child.parent_span_id
+                        AND parent.trace_id = child.trace_id
+                    WHERE parent.service_name = '{service}'
+                    AND child.service_name = '{dep_service}'
+                    AND parent.start_time > current_timestamp - interval '5' minute
+                """
+                results = self.executor.execute(sql)
+
+                if results and results[0].get("total", 0) >= 3:
+                    current_rate = results[0].get("error_rate") or 0
+
+                    if baseline["stddev"] > 0:
+                        z_score = (current_rate - baseline["mean"]) / baseline["stddev"]
+
+                        if z_score > self.config.zscore_threshold or current_rate > 0.15:
+                            severity = Severity.CRITICAL if current_rate > 0.25 or z_score > self.config.zscore_threshold * 1.5 else Severity.WARNING
+
+                            self._store_anomaly_score(
+                                service, metric, current_rate,
+                                baseline["mean"], baseline["mean"], baseline["stddev"],
+                                z_score, True, "zscore"
+                            )
+
+                            anomalies.append({
+                                "service": service,
+                                "metric_type": metric,
+                                "alert_type": AlertType.DEPENDENCY_FAILURE,
+                                "severity": severity,
+                                "current_value": current_rate,
+                                "baseline_value": baseline["mean"],
+                                "z_score": z_score,
+                                "message": f"Dependency {dep_service} failing: {current_rate:.1%} error rate (baseline: {baseline['mean']:.1%})"
+                            })
+
+        return anomalies
+
+    def _detect_exception_issues(self, service: str) -> List[Dict]:
+        """Detect exception-related root causes: surges and new exception types."""
+        anomalies = []
+
+        # Check exception rate surge
+        baseline = self.baseline_computer.get_baseline(service, "exception_rate")
+        if baseline:
+            sql = f"""
+                SELECT COUNT(*) as exception_count
+                FROM span_events_otel_analytic
+                WHERE service_name = '{service}'
+                AND exception_type IS NOT NULL AND exception_type != ''
+                AND timestamp > current_timestamp - interval '5' minute
+            """
+            results = self.executor.execute(sql)
+
+            if results:
+                # Normalize to hourly rate for comparison (5 min -> 1 hour = multiply by 12)
+                current_count = results[0].get("exception_count", 0)
+                current_hourly_rate = current_count * 12
+
+                if baseline["stddev"] > 0 and current_hourly_rate > 0:
+                    z_score = (current_hourly_rate - baseline["mean"]) / baseline["stddev"]
+
+                    if z_score > self.config.zscore_threshold:
+                        severity = Severity.WARNING if z_score < self.config.zscore_threshold * 1.5 else Severity.CRITICAL
+
+                        self._store_anomaly_score(
+                            service, "exception_rate", current_hourly_rate,
+                            baseline["mean"], baseline["mean"], baseline["stddev"],
+                            z_score, True, "zscore"
+                        )
+
+                        anomalies.append({
+                            "service": service,
+                            "metric_type": "exception_rate",
+                            "alert_type": AlertType.EXCEPTION_SURGE,
+                            "severity": severity,
+                            "current_value": current_hourly_rate,
+                            "baseline_value": baseline["mean"],
+                            "z_score": z_score,
+                            "message": f"Exception surge: {current_count} exceptions in 5 min (~{current_hourly_rate:.0f}/hour, baseline: {baseline['mean']:.0f}/hour)"
+                        })
+
+        # Check for new/unknown exception types
+        known_types = self.baseline_computer.get_known_exception_types(service)
+        if known_types:  # Only check if we have baseline exception types
+            sql = f"""
+                SELECT DISTINCT exception_type, COUNT(*) as count
+                FROM span_events_otel_analytic
+                WHERE service_name = '{service}'
+                AND exception_type IS NOT NULL AND exception_type != ''
+                AND timestamp > current_timestamp - interval '15' minute
+                GROUP BY exception_type
+                HAVING COUNT(*) >= 2
+            """
+            results = self.executor.execute(sql)
+
+            for row in results:
+                exc_type = row["exception_type"]
+                exc_count = row["count"]
+
+                if exc_type not in known_types:
+                    # New exception type detected
+                    anomalies.append({
+                        "service": service,
+                        "metric_type": f"new_exception:{exc_type[:50]}",
+                        "alert_type": AlertType.NEW_EXCEPTION_TYPE,
+                        "severity": Severity.WARNING,
+                        "current_value": exc_count,
+                        "baseline_value": 0,
+                        "z_score": 0,
+                        "message": f"New exception type detected: {exc_type} ({exc_count} occurrences in 15 min)"
+                    })
+
+        return anomalies
 
 
 # =============================================================================
