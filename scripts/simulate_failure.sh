@@ -102,19 +102,50 @@ postgres_status() {
 
     echo -e "PostgreSQL: ${GREEN}CONTAINER RUNNING${NC}"
 
-    # Check for network latency injection FIRST (doesn't require psql)
+    # Check for network latency injection (doesn't require psql)
     NETEM_ACTIVE=$(timeout 5 docker exec "$CONTAINER_ID" sh -c 'tc qdisc show dev eth0 2>/dev/null | grep netem' 2>/dev/null)
     if [ -n "$NETEM_ACTIVE" ]; then
         echo -e "Network latency: ${YELLOW}INJECTED${NC} ($NETEM_ACTIVE)"
-        echo -e "Queries: ${YELLOW}DEGRADED${NC} (latency injected)"
     else
         echo -e "Network latency: ${GREEN}NORMAL${NC}"
-        # Only do the query check when no latency is injected (avoids long wait)
-        if timeout 5 docker exec "$CONTAINER_ID" psql -U root -c "SELECT 1;" > /dev/null 2>&1; then
-            echo -e "Queries: ${GREEN}RESPONDING${NC}"
+    fi
+
+    # Measure actual query latency from OUTSIDE the PostgreSQL container
+    # (psql inside the container uses Unix socket, bypassing tc netem on eth0)
+    # Find another running container in the same compose project to test from
+    PROBE_CONTAINER=$(docker ps --filter "name=otel" --filter "status=running" -q 2>/dev/null | head -1)
+
+    if [ -n "$PROBE_CONTAINER" ]; then
+        # Measure TCP round-trip to PostgreSQL port from another container
+        # Uses bash /dev/tcp which measures actual network latency
+        LATENCY_MS=$(timeout 15 docker exec "$PROBE_CONTAINER" sh -c '
+            START=$(date +%s%N 2>/dev/null || echo 0)
+            if [ "$START" = "0" ]; then exit 1; fi
+            echo > /dev/tcp/postgresql/5432 2>/dev/null
+            END=$(date +%s%N)
+            echo $(( (END - START) / 1000000 ))
+        ' 2>/dev/null)
+        PROBE_EXIT=$?
+
+        if [ $PROBE_EXIT -eq 0 ] && [ -n "$LATENCY_MS" ]; then
+            IS_SLOW=$(echo "$LATENCY_MS" | awk '{print ($1 > 50) ? "yes" : "no"}')
+            if [ "$IS_SLOW" = "yes" ]; then
+                echo -e "Query latency: ${YELLOW}${LATENCY_MS} ms${NC} (degraded - normal is <5ms)"
+            else
+                echo -e "Query latency: ${GREEN}${LATENCY_MS} ms${NC}"
+            fi
+        elif [ $PROBE_EXIT -eq 124 ]; then
+            echo -e "Query latency: ${RED}TIMEOUT${NC} (>15s)"
         else
-            echo -e "Queries: ${YELLOW}SLOW OR UNRESPONSIVE${NC}"
+            # Fallback: just check if port is reachable at all
+            if timeout 10 docker exec "$PROBE_CONTAINER" sh -c 'nc -z postgresql 5432 2>/dev/null || (echo > /dev/tcp/postgresql/5432) 2>/dev/null'; then
+                echo -e "Query latency: ${GREEN}REACHABLE${NC} (could not measure exact time)"
+            else
+                echo -e "Query latency: ${RED}UNREACHABLE${NC}"
+            fi
         fi
+    else
+        echo -e "Query latency: ${YELLOW}SKIPPED${NC} (no probe container found)"
     fi
 
     # Check for background load generator process
