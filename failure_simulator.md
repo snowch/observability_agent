@@ -72,12 +72,17 @@ These inject failures at the application level, producing rich telemetry:
 ```
 
 **How `degrade postgres slow` works:**
-1. Creates a large table with 50,000 rows for expensive operations
-2. Reduces `work_mem` to 64kB (forces disk-based sorts)
-3. Starts a background process that continuously runs expensive cross-join queries
-4. This consumes PostgreSQL CPU, memory, and I/O - slowing down all concurrent queries
 
-The load generator runs until you call `restore postgres`.
+Primary method: **Network latency injection** using `tc` (traffic control)
+- Adds 150ms ± 50ms network delay to ALL PostgreSQL traffic
+- This affects ALL queries from ALL services, guaranteeing visible latency increase
+- Requires the container to have NET_ADMIN capability
+
+Fallback method (if tc unavailable): **Lock contention**
+- Creates a lock target table and runs multiple processes holding locks
+- Causes contention but may be less effective
+
+Run `restore postgres` to remove the latency injection.
 
 ### otel-demo API Injection
 
