@@ -92,73 +92,66 @@ postgres_unblock() {
 postgres_status() {
     log_info "Checking PostgreSQL status..."
 
-    # Check if the container is running using docker directly (faster than docker compose)
-    CONTAINER_ID=$(timeout 5 docker ps --filter "name=postgresql" --filter "status=running" -q 2>/dev/null)
+    # Check if the PostgreSQL container is running
+    PG_CONTAINER=$(timeout 5 docker ps --filter "name=postgresql" --filter "status=running" -q 2>/dev/null | head -1)
 
-    if [ -z "$CONTAINER_ID" ]; then
+    if [ -z "$PG_CONTAINER" ]; then
         echo -e "PostgreSQL: ${RED}DOWN${NC} (container not running)"
         return
     fi
 
     echo -e "PostgreSQL: ${GREEN}CONTAINER RUNNING${NC}"
 
-    # Check for network latency injection (doesn't require psql)
-    NETEM_ACTIVE=$(timeout 5 docker exec "$CONTAINER_ID" sh -c 'tc qdisc show dev eth0 2>/dev/null | grep netem' 2>/dev/null)
-    if [ -n "$NETEM_ACTIVE" ]; then
-        echo -e "Network latency: ${YELLOW}INJECTED${NC} ($NETEM_ACTIVE)"
+    # Check if the latency proxy is active
+    PROXY_RUNNING=$(docker ps --filter "name=$PROXY_CONTAINER_NAME" --filter "status=running" -q 2>/dev/null)
+    if [ -n "$PROXY_RUNNING" ]; then
+        echo -e "Latency proxy: ${YELLOW}ACTIVE${NC} (${PROXY_LATENCY_MS}ms delay)"
+        echo -e "  Services connect via: proxy → postgresql-direct"
     else
-        echo -e "Network latency: ${GREEN}NORMAL${NC}"
+        echo -e "Latency proxy: ${GREEN}INACTIVE${NC} (direct connection)"
     fi
 
-    # Measure actual query latency from OUTSIDE the PostgreSQL container
-    # (psql inside the container uses Unix socket, bypassing tc netem on eth0)
-    # Find another running container in the same compose project to test from
-    PROBE_CONTAINER=$(docker ps --filter "name=otel" --filter "status=running" -q 2>/dev/null | head -1)
+    # Measure actual query latency by connecting THROUGH the network
+    # If proxy is active, this measures proxy + PostgreSQL latency
+    # Uses another container to connect to 'postgresql' hostname (which hits proxy if active)
+    echo -n "Measuring query latency... "
 
-    if [ -n "$PROBE_CONTAINER" ]; then
-        # Measure TCP round-trip to PostgreSQL port from another container
-        # Uses bash /dev/tcp which measures actual network latency
-        LATENCY_MS=$(timeout 15 docker exec "$PROBE_CONTAINER" sh -c '
-            START=$(date +%s%N 2>/dev/null || echo 0)
-            if [ "$START" = "0" ]; then exit 1; fi
-            echo > /dev/tcp/postgresql/5432 2>/dev/null
-            END=$(date +%s%N)
-            echo $(( (END - START) / 1000000 ))
+    # Find a container to probe from (any running otel-demo container)
+    PROBE=$(docker ps --filter "status=running" -q 2>/dev/null | while read cid; do
+        CNAME=$(docker inspect -f '{{.Name}}' "$cid" 2>/dev/null)
+        # Skip the proxy itself and postgresql
+        if echo "$CNAME" | grep -qvE "(postgresql|$PROXY_CONTAINER_NAME)"; then
+            echo "$cid"
+            break
+        fi
+    done)
+
+    if [ -n "$PROBE" ]; then
+        # Measure TCP connection time to 'postgresql:5432' from another container
+        LATENCY=$(timeout 15 docker exec "$PROBE" sh -c '
+            S=$(date +%s%N 2>/dev/null)
+            if [ -z "$S" ] || [ "$S" = "0" ]; then exit 1; fi
+            (echo > /dev/tcp/postgresql/5432) 2>/dev/null
+            E=$(date +%s%N)
+            echo $(( (E - S) / 1000000 ))
         ' 2>/dev/null)
         PROBE_EXIT=$?
 
-        if [ $PROBE_EXIT -eq 0 ] && [ -n "$LATENCY_MS" ]; then
-            IS_SLOW=$(echo "$LATENCY_MS" | awk '{print ($1 > 50) ? "yes" : "no"}')
-            if [ "$IS_SLOW" = "yes" ]; then
-                echo -e "Query latency: ${YELLOW}${LATENCY_MS} ms${NC} (degraded - normal is <5ms)"
+        if [ $PROBE_EXIT -eq 0 ] && [ -n "$LATENCY" ]; then
+            if [ "$LATENCY" -gt 500 ]; then
+                echo -e "${RED}${LATENCY} ms${NC} (severely degraded)"
+            elif [ "$LATENCY" -gt 50 ]; then
+                echo -e "${YELLOW}${LATENCY} ms${NC} (degraded - normal is <5ms)"
             else
-                echo -e "Query latency: ${GREEN}${LATENCY_MS} ms${NC}"
+                echo -e "${GREEN}${LATENCY} ms${NC}"
             fi
         elif [ $PROBE_EXIT -eq 124 ]; then
-            echo -e "Query latency: ${RED}TIMEOUT${NC} (>15s)"
+            echo -e "${RED}TIMEOUT (>15s)${NC}"
         else
-            # Fallback: just check if port is reachable at all
-            if timeout 10 docker exec "$PROBE_CONTAINER" sh -c 'nc -z postgresql 5432 2>/dev/null || (echo > /dev/tcp/postgresql/5432) 2>/dev/null'; then
-                echo -e "Query latency: ${GREEN}REACHABLE${NC} (could not measure exact time)"
-            else
-                echo -e "Query latency: ${RED}UNREACHABLE${NC}"
-            fi
+            echo -e "${YELLOW}could not measure${NC}"
         fi
     else
-        echo -e "Query latency: ${YELLOW}SKIPPED${NC} (no probe container found)"
-    fi
-
-    # Check for background load generator process
-    MARKER_FILE="/tmp/postgres_load_generator.pid"
-    if [ -f "$MARKER_FILE" ]; then
-        LOAD_GEN_PID=$(cat "$MARKER_FILE")
-        if kill -0 "$LOAD_GEN_PID" 2>/dev/null; then
-            echo -e "Load generator: ${YELLOW}ACTIVE${NC} (PID: $LOAD_GEN_PID)"
-        else
-            echo -e "Load generator: ${GREEN}INACTIVE${NC} (stale PID file)"
-        fi
-    else
-        echo -e "Load generator: ${GREEN}INACTIVE${NC}"
+        echo -e "${YELLOW}no probe container found${NC}"
     fi
 }
 
@@ -179,88 +172,82 @@ postgres_degrade() {
     esac
 }
 
-postgres_degrade_slow() {
-    log_info "Enabling slow query simulation via network latency..."
+PROXY_CONTAINER_NAME="pg-latency-proxy"
+PROXY_STATE_FILE="/tmp/pg_proxy_active"
+PROXY_LATENCY_MS=${PG_PROXY_LATENCY_MS:-150}
 
-    # Use tc (traffic control) to add latency to PostgreSQL container's network
-    # This adds 100-200ms delay to ALL network traffic to/from PostgreSQL
-    CONTAINER_ID=$(docker ps --filter "name=postgresql" --filter "status=running" -q 2>/dev/null)
-    if [ -z "$CONTAINER_ID" ]; then
+postgres_degrade_slow() {
+    log_info "Enabling slow query simulation via TCP proxy..."
+
+    # Find the PostgreSQL container and its Docker network
+    PG_CONTAINER=$(docker ps --filter "name=postgresql" --filter "status=running" -q 2>/dev/null | head -1)
+    if [ -z "$PG_CONTAINER" ]; then
         log_error "PostgreSQL container is not running"
         exit 1
     fi
 
-    timeout 60 docker exec --user root "$CONTAINER_ID" sh -c '
-        # Install iproute2 if not present (for tc command)
-        apt-get update -qq && apt-get install -y -qq iproute2 2>/dev/null || apk add --quiet iproute2 2>/dev/null || true
+    # Get the Docker network the PostgreSQL container is on
+    PG_NETWORK=$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}' "$PG_CONTAINER" 2>/dev/null | head -1)
+    if [ -z "$PG_NETWORK" ]; then
+        log_error "Could not determine PostgreSQL container network"
+        exit 1
+    fi
 
-        # Add 150ms latency with 50ms jitter to the network interface
-        tc qdisc add dev eth0 root netem delay 150ms 50ms 2>/dev/null || \
-        tc qdisc change dev eth0 root netem delay 150ms 50ms 2>/dev/null
+    log_info "PostgreSQL container: $PG_CONTAINER"
+    log_info "Docker network: $PG_NETWORK"
 
-        echo "Network latency injection configured"
-    '
+    # Remove existing proxy if any
+    docker rm -f "$PROXY_CONTAINER_NAME" 2>/dev/null || true
 
-    if [ $? -eq 0 ]; then
-        log_info "Slow query simulation enabled."
-        log_info "Network latency: 150ms +/- 50ms added to all PostgreSQL connections."
+    # Step 1: Disconnect PostgreSQL from the network and reconnect with a different alias
+    # This makes the original 'postgresql' DNS name available for our proxy
+    log_info "Rerouting PostgreSQL DNS via proxy..."
+
+    # Get current aliases
+    PG_ALIASES=$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{range $v.Aliases}}{{.}} {{end}}{{end}}' "$PG_CONTAINER" 2>/dev/null)
+    log_info "Current aliases: $PG_ALIASES"
+
+    docker network disconnect "$PG_NETWORK" "$PG_CONTAINER" 2>/dev/null || true
+    docker network connect --alias postgresql-direct "$PG_NETWORK" "$PG_CONTAINER"
+
+    # Step 2: Start the proxy container with alias 'postgresql'
+    # Uses socat to forward TCP traffic, with a delay injected via tc netem on the proxy itself
+    log_info "Starting latency proxy (${PROXY_LATENCY_MS}ms delay)..."
+
+    docker run -d \
+        --name "$PROXY_CONTAINER_NAME" \
+        --network "$PG_NETWORK" \
+        --network-alias postgresql \
+        --cap-add NET_ADMIN \
+        alpine/socat \
+        TCP-LISTEN:5432,fork,reuseaddr TCP:postgresql-direct:5432
+
+    # Wait for proxy to start
+    sleep 2
+
+    # Add network latency to the PROXY container (not PostgreSQL)
+    # This is safe - docker exec to the proxy works fine since the proxy is just forwarding
+    PROXY_ID=$(docker ps --filter "name=$PROXY_CONTAINER_NAME" -q 2>/dev/null)
+    if [ -n "$PROXY_ID" ]; then
+        docker exec --user root "$PROXY_ID" sh -c "
+            apk add --quiet --no-cache iproute2 2>/dev/null
+            tc qdisc add dev eth0 root netem delay ${PROXY_LATENCY_MS}ms 25ms 2>/dev/null || \
+            tc qdisc change dev eth0 root netem delay ${PROXY_LATENCY_MS}ms 25ms 2>/dev/null
+        " 2>/dev/null
+
+        # Save state
+        echo "${PG_NETWORK}" > "$PROXY_STATE_FILE"
+
+        log_info "Proxy started successfully."
+        log_info "All services now connect through proxy with ${PROXY_LATENCY_MS}ms +/- 25ms latency."
+        log_info "PostgreSQL itself is unaffected (docker exec still works)."
         log_info "This should trigger 'DB_SLOW_QUERIES' alerts in root cause monitoring."
     else
-        log_error "Failed to inject network latency. Container may not have NET_ADMIN capability."
-        log_info "Falling back to connection starvation method..."
-        postgres_degrade_slow_fallback
+        log_error "Proxy container failed to start. Restoring direct connection..."
+        docker network disconnect "$PG_NETWORK" "$PG_CONTAINER" 2>/dev/null || true
+        docker network connect --alias postgresql "$PG_NETWORK" "$PG_CONTAINER"
+        exit 1
     fi
-}
-
-# Fallback method if tc doesn't work
-postgres_degrade_slow_fallback() {
-    log_info "Using connection starvation method..."
-
-    # Reduce max_connections and consume most of them
-    docker compose exec -T postgresql psql -U root -d "${POSTGRES_DB:-otel}" <<'EOF'
--- Dramatically reduce max_connections (requires restart to take effect)
--- Instead, we'll use pg_sleep in a different way
-
--- Create a table for lock contention
-CREATE TABLE IF NOT EXISTS _lock_target (
-    id INTEGER PRIMARY KEY,
-    data TEXT
-);
-INSERT INTO _lock_target VALUES (1, 'lock target') ON CONFLICT DO NOTHING;
-
--- Create function that holds locks
-CREATE OR REPLACE FUNCTION hold_lock_briefly() RETURNS void AS $$
-BEGIN
-    -- Hold an exclusive lock on the target row for 100ms
-    PERFORM * FROM _lock_target WHERE id = 1 FOR UPDATE;
-    PERFORM pg_sleep(0.1);
-END;
-$$ LANGUAGE plpgsql;
-EOF
-
-    # Start multiple lock-holding processes
-    MARKER_FILE="/tmp/postgres_load_generator.pid"
-
-    if [ -f "$MARKER_FILE" ]; then
-        OLD_PID=$(cat "$MARKER_FILE")
-        kill "$OLD_PID" 2>/dev/null || true
-        pkill -P "$OLD_PID" 2>/dev/null || true
-    fi
-
-    (
-        while true; do
-            # Run multiple lock holders in parallel
-            for i in 1 2 3 4 5; do
-                docker compose exec -T postgresql psql -U root -d "${POSTGRES_DB:-otel}" -c \
-                    "SELECT hold_lock_briefly();" > /dev/null 2>&1 &
-            done
-            wait
-            sleep 0.1
-        done
-    ) &
-
-    echo $! > "$MARKER_FILE"
-    log_info "Lock contention simulation running (PID: $(cat $MARKER_FILE))"
 }
 
 postgres_degrade_memory() {
@@ -295,45 +282,53 @@ EOF
 postgres_restore() {
     log_info "Restoring PostgreSQL to normal operation..."
 
-    # Stop the background load generator if running
-    MARKER_FILE="/tmp/postgres_load_generator.pid"
-    if [ -f "$MARKER_FILE" ]; then
-        OLD_PID=$(cat "$MARKER_FILE")
-        log_info "Stopping background load generator (PID: $OLD_PID)..."
-        kill "$OLD_PID" 2>/dev/null || true
-        # Also kill any child processes (docker exec)
-        pkill -P "$OLD_PID" 2>/dev/null || true
-        rm -f "$MARKER_FILE"
+    # Remove the proxy and restore direct PostgreSQL connection
+    if [ -f "$PROXY_STATE_FILE" ]; then
+        PG_NETWORK=$(cat "$PROXY_STATE_FILE")
+        log_info "Removing latency proxy on network: $PG_NETWORK"
+
+        # Find the real PostgreSQL container (connected as postgresql-direct)
+        PG_CONTAINER=$(docker ps --filter "status=running" -q 2>/dev/null | while read cid; do
+            if docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{range $v.Aliases}}{{.}} {{end}}{{end}}' "$cid" 2>/dev/null | grep -q "postgresql-direct"; then
+                echo "$cid"
+                break
+            fi
+        done)
+
+        # Stop and remove the proxy container
+        docker rm -f "$PROXY_CONTAINER_NAME" 2>/dev/null || true
+
+        # Reconnect PostgreSQL with its original alias
+        if [ -n "$PG_CONTAINER" ] && [ -n "$PG_NETWORK" ]; then
+            log_info "Restoring direct PostgreSQL connection..."
+            docker network disconnect "$PG_NETWORK" "$PG_CONTAINER" 2>/dev/null || true
+            docker network connect --alias postgresql --alias postgresql-direct "$PG_NETWORK" "$PG_CONTAINER"
+            log_info "PostgreSQL DNS alias restored."
+        else
+            log_warn "Could not find PostgreSQL container to restore alias."
+            log_warn "You may need to restart the otel-demo: docker compose restart postgresql"
+        fi
+
+        rm -f "$PROXY_STATE_FILE"
+    else
+        # Legacy cleanup: remove tc netem if it was applied directly
+        CONTAINER_ID=$(docker ps --filter "name=postgresql" -q 2>/dev/null)
+        if [ -n "$CONTAINER_ID" ]; then
+            timeout 10 docker exec --user root "$CONTAINER_ID" sh -c '
+                tc qdisc del dev eth0 root 2>/dev/null || true
+            ' 2>/dev/null || true
+        fi
+        docker rm -f "$PROXY_CONTAINER_NAME" 2>/dev/null || true
+        rm -f /tmp/postgres_netem_active
     fi
 
-    # Remove network latency injection
-    log_info "Removing network latency injection..."
-    CONTAINER_ID=$(docker ps --filter "name=postgresql" -q 2>/dev/null)
-    if [ -n "$CONTAINER_ID" ]; then
-        timeout 10 docker exec --user root "$CONTAINER_ID" sh -c '
-            tc qdisc del dev eth0 root 2>/dev/null || true
-            echo "Network latency removed"
-        ' 2>/dev/null || true
-    fi
-
-    docker compose exec -T postgresql psql -U root -d "${POSTGRES_DB:-otel}" <<'EOF'
--- Remove load generator functions and tables
-DROP FUNCTION IF EXISTS run_load_iteration() CASCADE;
-DROP FUNCTION IF EXISTS simulate_slow_query() CASCADE;
-DROP FUNCTION IF EXISTS hold_lock_briefly() CASCADE;
-DROP TABLE IF EXISTS _load_generator;
-DROP TABLE IF EXISTS _lock_target;
-
--- Reset all memory/performance settings to defaults
+    # Clean up memory pressure settings if any
+    docker compose exec -T postgresql psql -U root -d "${POSTGRES_DB:-otel}" <<'EOF' 2>/dev/null
 ALTER SYSTEM RESET work_mem;
 ALTER SYSTEM RESET maintenance_work_mem;
 ALTER SYSTEM RESET temp_buffers;
 ALTER SYSTEM RESET effective_cache_size;
-ALTER SYSTEM RESET log_min_duration_statement;
-
 SELECT pg_reload_conf();
-
--- Clean up memory pressure table
 DROP TABLE IF EXISTS _memory_pressure;
 EOF
 
