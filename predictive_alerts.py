@@ -998,6 +998,8 @@ Start by checking for errors, exceptions, and anomalies in this service and its 
                 for tool_call in tool_calls:
                     if tool_call.name == "execute_sql":
                         sql = tool_call.input.get("sql", "")
+                        # Strip semicolons - Trino doesn't accept them
+                        sql = sql.strip().rstrip(';')
                         queries_executed += 1
 
                         # Execute query
